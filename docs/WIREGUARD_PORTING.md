@@ -33,7 +33,7 @@ not part of committed source to avoid shipping an unreviewed cryptography fork.
 
 1. Compile the library with ESP-IDF 6.0.1 for esp32p4.
 2. Verify WG handshakes with ESP-hosted Wi-Fi STA.
-3. Establish synchronized system time using SNTP (not yet wired).
+3. Verify SNTP synchronization via esp_netif_sntp_init before handshake.
 4. Verify encrypted routing to the DietPi VPN destination.
 5. Demonstrate packets cannot escape unencrypted on STA if VPN goes down.
 6. Confirm no DSP/USB packet loss under continuous load.
