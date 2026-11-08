@@ -21,6 +21,8 @@ jobs:
         shell: bash
         run: |
           . /opt/esp/idf/export.sh
+          python -m pip install --disable-pip-version-check --upgrade 'idf-component-manager==2.5.2'
+          python -m pip show idf-component-manager
           if [ "${{ matrix.mode }}" = "remote-lan" ]; then
             cat >> sdkconfig.defaults <<'EOF'
           CONFIG_ADSBIN_REMOTE_ENABLE=y
