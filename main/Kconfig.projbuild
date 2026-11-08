@@ -98,3 +98,35 @@ menu "ADSBin"
             default and is used to configure the port before any UBX retune.
 
 endmenu
+
+menu "Remote ADS-B receiver (experimental)"
+    config ADSBIN_REMOTE_ENABLE
+        bool "Remote receiver: Wi-Fi STA and Beast TCP"
+        default n
+    config ADSBIN_REMOTE_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_WIFI_PASSWORD
+        string "Wi-Fi password (do not commit sdkconfig)"
+        default ""
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_HOST
+        string "Beast destination IPv4 (LAN test only)"
+        default "192.168.107.20"
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_PORT
+        int "Beast TCP port"
+        range 1 65535
+        default 30004
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_QUEUE
+        int "Frame queue depth"
+        range 32 1024
+        default 256
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
+        bool "ALLOW UNENCRYPTED TCP (trusted LAN testing ONLY)"
+        default n
+        depends on ADSBIN_REMOTE_ENABLE
+endmenu
