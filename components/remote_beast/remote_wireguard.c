@@ -112,8 +112,8 @@ esp_err_t remote_wireguard_start(void)
     wireguard_config_t cfg = ESP_WIREGUARD_CONFIG_DEFAULT();
     cfg.private_key = CONFIG_ADSBIN_WG_PRIVATE_KEY;
     cfg.public_key = CONFIG_ADSBIN_WG_PEER_PUBLIC_KEY;
-    cfg.allowed_ip = CONFIG_ADSBIN_WG_LOCAL_IP;
-    cfg.allowed_ip_mask = "255.255.255.255";
+    cfg.address = CONFIG_ADSBIN_WG_LOCAL_IP;
+    cfg.netmask = "255.255.255.255";
     cfg.endpoint = CONFIG_ADSBIN_WG_ENDPOINT;
     cfg.port = CONFIG_ADSBIN_WG_PORT;
     cfg.persistent_keepalive = 25;
