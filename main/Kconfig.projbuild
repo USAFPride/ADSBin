@@ -159,3 +159,18 @@ menu "Remote WireGuard (experimental: P4 port required)"
         default 51820
         depends on ADSBIN_REMOTE_WIREGUARD
 endmenu
+
+# ESP-Hosted 2.12.x references these manifest-gate symbols in if clauses
+# even when their optional USB transports are not installed. ESP-IDF 6.0.1's
+# strict Kconfig checker errors on unknown symbols. Our board uses SDIO only:
+# explicitly define all three optional gates to false, so the unused USB
+# components remain disabled. Remove when upstream fixes its manifest gates.
+config ESP_HOSTED_HOST_USB_CDC_ACM_MANIFEST
+    bool
+    default n
+config ESP_HOSTED_HOST_USB_CHERRYUSB_MANIFEST
+    bool
+    default n
+config ESP_HOSTED_HOST_USB_RNDIS_MANIFEST
+    bool
+    default n
