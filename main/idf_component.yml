@@ -29,10 +29,10 @@ dependencies:
       - if: "target in [esp32p4, esp32h2]"
 
 
-  # A pinned experimental WireGuard implementation for the ESP32-P4 port.
+  # A pinned maintained ESPHome WireGuard component for the ESP32-P4 port.
   # This component's compatibility with ESP-IDF 6 / P4 is exercised in CI;
   # network behavior and cryptography still require device-level validation.
-  trombik/esp_wireguard:
-    version: "==0.9.0"
+  esphome/wireguard:
+    version: "==0.4.8"
     rules:
       - if: "target == esp32p4"
