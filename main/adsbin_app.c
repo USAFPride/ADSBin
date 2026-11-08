@@ -1336,6 +1336,7 @@ esp_err_t adsbin_app_start(void)
         }
     }
 
+#endif /* no GDL90 Wi-Fi broadcast in remote mode */
     // Spawn the Core-1 publisher (snapshots traffic + ownship every cycle).
     const sinks_loop_cfg_t loop_cfg = {
         .publish_interval_ms = ADSBIN_PUBLISH_INTERVAL_MS,
@@ -1343,7 +1344,6 @@ esp_err_t adsbin_app_start(void)
         .task_priority       = ADSBIN_PRIO_SINKS,
         .task_core_id        = ADSBIN_CORE_DECODE,
     };
-#endif /* no GDL90 Wi-Fi broadcast in remote mode */
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
 #ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
     esp_err_t wg_err = remote_wireguard_start();
