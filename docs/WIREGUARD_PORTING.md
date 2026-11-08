@@ -8,11 +8,11 @@ Do not merge/deploy to a remote unattended station until the checks below pass.
 
 ## Component
 
-The ESP-IDF component manager fetches **trombik/esp_wireguard 0.9.0** from
+The ESP-IDF component manager fetches **esphome/wireguard 0.4.8** from
 the Espressif component registry. The original `tools/install-wireguard-component.sh`
 manual clone procedure is no longer required and should not be used.
-The library is BSD-3-Clause, alpha status, and has not documented ESP-IDF 6.0.1
-or ESP32-P4 support.
+The component is BSD-3-Clause and more actively maintained than the original
+alpha library; specific ESP-IDF 6.0.1 / ESP32-P4 support is not verified.
 
 ## Local build check
 
