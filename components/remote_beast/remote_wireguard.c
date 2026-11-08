@@ -60,12 +60,17 @@ static void wg_monitor_task(void *arg)
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
-        err = esp_wireguard_connect(&s_ctx);
+        /* The ESPHome fork resolves DNS asynchronously. Its connect method
+         * returns ESP_ERR_RETRY while the endpoint lookup is in progress. */
+        for (int attempt = 0; attempt < 20; attempt++) {
+            err = esp_wireguard_connect(&s_ctx);
+            if (err != ESP_ERR_RETRY) break;
+            if (!wifi_station_is_connected()) break;
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
         if (err != ESP_OK) {
             ESP_LOGW(TAG, "WireGuard connect: %s", esp_err_to_name(err));
-            /* Upstream disconnect() may assume a successfully created netif.
-             * Do not call it on an unsuccessful connect until that behavior is
-             * validated on ESP-IDF 6. */
+            if (s_ctx.netif != NULL) (void)esp_wireguard_disconnect(&s_ctx);
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
