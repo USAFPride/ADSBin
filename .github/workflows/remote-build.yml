@@ -6,6 +6,10 @@ on:
     branches: [feature/remote-adsb-wireguard]
   workflow_dispatch:
 
+concurrency:
+  group: remote-p4-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   build:
     runs-on: ubuntu-latest
