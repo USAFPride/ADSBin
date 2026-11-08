@@ -1,0 +1,1 @@
+idf_component_register(SRCS "remote_beast.c" INCLUDE_DIRS "include" REQUIRES common freertos lwip wifi_link)
