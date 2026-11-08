@@ -1,5 +1,6 @@
 #include "remote_beast.h"
 #include "wifi_station.h"
+#include "remote_wireguard.h"
 #include "sdkconfig.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -47,11 +48,17 @@ static void sender(void *arg)
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
-#ifndef CONFIG_ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
-        /* Fail closed: WireGuard gating will be integrated after port is verified. */
+#if !defined(CONFIG_ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN) && !defined(CONFIG_ADSBIN_REMOTE_WIREGUARD)
+        /* No transport authorized: fail closed. */
         vTaskDelay(pdMS_TO_TICKS(2000));
         continue;
 #else
+#ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
+        if (!remote_wireguard_peer_up()) {
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+#endif
         struct sockaddr_in target = { .sin_family = AF_INET,
             .sin_port = htons(CONFIG_ADSBIN_REMOTE_PORT) };
         if (inet_pton(AF_INET, CONFIG_ADSBIN_REMOTE_HOST, &target.sin_addr) != 1) {
@@ -69,9 +76,12 @@ static void sender(void *arg)
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
-        ESP_LOGI(TAG, "Connected to Beast TCP receiver (LAN test mode)");
+        ESP_LOGI(TAG, "Connected to Beast TCP receiver");
         xQueueReset(s_frames); // no stale frames after reconnect
         while (wifi_station_is_connected() &&
+#ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
+               remote_wireguard_peer_up() &&
+#endif
                xQueueReceive(s_frames, &frame, pdMS_TO_TICKS(2000)) == pdTRUE) {
             size_t n = encode(&frame, buf, sizeof(buf));
             if (!n) continue;
