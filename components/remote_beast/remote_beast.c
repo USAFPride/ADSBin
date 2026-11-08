@@ -68,6 +68,20 @@ static void sender(void *arg)
         }
         int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (fd < 0) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
+#ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
+        /* Source-binding is a second guard against an unintended plaintext
+         * route if the remote Wi-Fi network overlaps the DietPi subnet.
+         * Field tests must still verify no outbound TCP packet leaks. */
+        struct sockaddr_in source = { .sin_family = AF_INET };
+        if (inet_pton(AF_INET, CONFIG_ADSBIN_WG_LOCAL_IP,
+                      &source.sin_addr) != 1 ||
+            bind(fd, (struct sockaddr *)&source, sizeof(source)) != 0) {
+            ESP_LOGW(TAG, "Could not bind TCP to tunnel source address");
+            close(fd);
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            continue;
+        }
+#endif
         struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
@@ -87,6 +101,9 @@ static void sender(void *arg)
             if (!n) continue;
             size_t offset = 0;
             while (offset < n) {
+#ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
+                if (!remote_wireguard_peer_up()) break;
+#endif
                 int written = send(fd, buf + offset, n - offset, 0);
                 if (written <= 0) break;
                 offset += (size_t)written;
