@@ -11,13 +11,19 @@
 #include <time.h>
 #ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
 #include "esp_wireguard.h"
+#include "esp_netif_sntp.h"
 static const char *TAG = "remote_wg";
 static wireguard_ctx_t s_ctx;
 static volatile bool s_running;
+static bool s_ntp_started;
 static void wg_task(void *arg)
 {
     (void)arg;
     for (;;) {
+        if (wifi_station_is_connected() && !s_ntp_started) {
+            esp_sntp_config_t ntp = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+            if (esp_netif_sntp_init(&ntp) == ESP_OK) s_ntp_started = true;
+        }
         if (!wifi_station_is_connected() || time(NULL) < 1700000000) {
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
