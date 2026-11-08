@@ -1,0 +1,35 @@
+name: ESP32-P4 remote receiver build
+on:
+  push:
+    branches: [feature/remote-adsb-wireguard]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [upstream, remote-lan]
+    container:
+      image: espressif/idf:v6.0.1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ESP32-P4 firmware
+        shell: bash
+        run: |
+          . /opt/esp/idf/export.sh
+          python -m pip install --disable-pip-version-check --upgrade 'idf-component-manager==2.5.2'
+          python -m pip show idf-component-manager
+          if [ "${{ matrix.mode }}" = "remote-lan" ]; then
+            cat >> sdkconfig.defaults <<'EOF'
+          CONFIG_ADSBIN_REMOTE_ENABLE=y
+          CONFIG_ADSBIN_REMOTE_WIFI_SSID="test-wifi"
+          CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD="test-password"
+          CONFIG_ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN=y
+          EOF
+          fi
+          idf.py set-target esp32p4
+          idf.py build

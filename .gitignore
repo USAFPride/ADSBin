@@ -17,3 +17,6 @@ Thumbs.db
 /.claude
 PERF_OVERHAUL_PLAN.md
 *.log
+
+# Third-party WireGuard port is installed locally until reviewed/pinned.
+/components/esp_wireguard/

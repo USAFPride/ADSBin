@@ -98,3 +98,65 @@ menu "ADSBin"
             default and is used to configure the port before any UBX retune.
 
 endmenu
+
+menu "Remote ADS-B receiver (experimental)"
+    config ADSBIN_REMOTE_ENABLE
+        bool "Remote receiver: Wi-Fi STA and Beast TCP"
+        default n
+    config ADSBIN_REMOTE_WIFI_SSID
+        string "Wi-Fi SSID"
+        default ""
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_WIFI_PASSWORD
+        string "Wi-Fi password (do not commit sdkconfig)"
+        default ""
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_HOST
+        string "Beast destination IPv4 (LAN test only)"
+        default "192.168.107.20"
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_PORT
+        int "Beast TCP port"
+        range 1 65535
+        default 30004
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_QUEUE
+        int "Frame queue depth"
+        range 32 1024
+        default 256
+        depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
+        bool "ALLOW UNENCRYPTED TCP (trusted LAN testing ONLY)"
+        default n
+        depends on ADSBIN_REMOTE_ENABLE
+endmenu
+
+menu "Remote WireGuard (experimental: P4 port required)"
+    config ADSBIN_REMOTE_WIREGUARD
+        bool "Enable experimental WireGuard"
+        depends on ADSBIN_REMOTE_ENABLE
+        depends on !ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
+        default n
+    config ADSBIN_WG_PRIVATE_KEY
+        string "Client private key - local sdkconfig ONLY"
+        default ""
+        depends on ADSBIN_REMOTE_WIREGUARD
+    config ADSBIN_WG_PEER_PUBLIC_KEY
+        string "UDM-Pro peer public key"
+        default ""
+        depends on ADSBIN_REMOTE_WIREGUARD
+    config ADSBIN_WG_LOCAL_IP
+        string "Tunnel IPv4 /32"
+        default "10.50.0.20"
+        depends on ADSBIN_REMOTE_WIREGUARD
+    config ADSBIN_WG_ENDPOINT
+        string "WireGuard server DNS name or IPv4"
+        default ""
+        depends on ADSBIN_REMOTE_WIREGUARD
+    config ADSBIN_WG_PORT
+        int "WireGuard UDP server port"
+        range 1 65535
+        default 51820
+        depends on ADSBIN_REMOTE_WIREGUARD
+endmenu
+

@@ -76,7 +76,12 @@
 #include "sink_debug.h"     // human-readable debug sink
 #include "sink_gdl90.h"     // GDL90 sink
 #include "sink_uat_weather.h" // GDL90 0x07 FIS-B weather relay sink
-#include "wifi_link.h"      // open SoftAP on the on-board C6 (esp-hosted, S10)
+#include "wifi_link.h"
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+#include "wifi_station.h"
+#include "remote_beast.h"
+#include "remote_wireguard.h"
+#endif      // open SoftAP on the on-board C6 (esp-hosted, S10)
 #include "status.h"         // LEDs + temperature watchdog
 
 /// Log tag for the application core.
@@ -192,6 +197,9 @@ static void decode_task(void *arg)
             continue;
         }
 
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+        remote_beast_offer(&frame);
+#endif
         // (a) Hand the decoded observation to the traffic task. Bounded wait so a
         //     wedged traffic task can never back-pressure the decode loop into
         //     starving demod1090's output queue — drop-with-trace instead.
@@ -1090,6 +1098,10 @@ esp_err_t adsbin_app_start(void)
     if (sink_map_early == ADSBIN_SINK_NONE) {
         sink_map_early = ADSBIN_SINK_DEBUG | ADSBIN_SINK_GDL90 | ADSBIN_SINK_WIFI;
     }
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+    esp_err_t station_err = wifi_station_start();
+    if (station_err != ESP_OK) ESP_LOGW(TAG, "STA start failed: %s", esp_err_to_name(station_err));
+#else
     if (sink_map_early & ADSBIN_SINK_WIFI) {
         const wifi_link_ap_cfg_t apcfg_early = {
             .ssid        = CONFIG_ADSBIN_AP_SSID,
@@ -1102,6 +1114,8 @@ esp_err_t adsbin_app_start(void)
                           "wired path unaffected", esp_err_to_name(werr));
         }
     }
+
+#endif /* remote STA vs SoftAP */
 
     // Register the lifecycle callback that drives LIVE hotplug of the 978/weather
     // pipeline: a weather dongle plugged/pulled while running stands the path up or
@@ -1268,6 +1282,7 @@ esp_err_t adsbin_app_start(void)
      * running ForeFlight receives the same frames on UDP :4000. EVERY failure
      * here is non-fatal: WiFi is a bonus, never a precondition for decoding, so
      * we log and continue, leaving the USB-CDC path fully intact. */
+#ifndef CONFIG_ADSBIN_REMOTE_ENABLE
     if (sink_map & ADSBIN_SINK_WIFI) {
         // Stand up the open AP on the C6. SSID/channel/max-clients come from the
         // project Kconfig (menu "ADSBin"); authmode is fixed OPEN inside wifi_link
@@ -1321,6 +1336,7 @@ esp_err_t adsbin_app_start(void)
         }
     }
 
+#endif /* no GDL90 Wi-Fi broadcast in remote mode */
     // Spawn the Core-1 publisher (snapshots traffic + ownship every cycle).
     const sinks_loop_cfg_t loop_cfg = {
         .publish_interval_ms = ADSBIN_PUBLISH_INTERVAL_MS,
@@ -1328,6 +1344,14 @@ esp_err_t adsbin_app_start(void)
         .task_priority       = ADSBIN_PRIO_SINKS,
         .task_core_id        = ADSBIN_CORE_DECODE,
     };
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+#ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
+    esp_err_t wg_err = remote_wireguard_start();
+    if (wg_err != ESP_OK) ESP_LOGW(TAG, "WireGuard start failed: %s", esp_err_to_name(wg_err));
+#endif
+    esp_err_t beast_err = remote_beast_start();
+    if (beast_err != ESP_OK) ESP_LOGW(TAG, "Remote Beast start failed: %s", esp_err_to_name(beast_err));
+#endif
     err = sinks_start(&loop_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "sinks_start failed: %s", esp_err_to_name(err));
