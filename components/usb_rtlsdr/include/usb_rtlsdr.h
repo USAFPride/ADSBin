@@ -147,6 +147,21 @@ typedef struct {
     uint8_t  iq_min_q;        /**< Min Q of latest periodic sampled USB transfer. */
     uint8_t  iq_max_q;        /**< Max Q of latest periodic sampled USB transfer. */
     uint32_t iq_sample_pairs; /**< Pairs inspected in latest sampled transfer.    */
+
+    /* Instrumentation-only USB bulk-IN diagnostics (cumulative counters).
+     * These do not change transfer sizes, RF tuning, or IQ handling. */
+    uint64_t urb_completions;       /**< Completed bulk-IN transfers. */
+    uint64_t urb_input_bytes;       /**< Bytes received before any ring drops. */
+    uint64_t urb_short_transfers;   /**< Completed transfers shorter than requested. */
+    uint64_t urb_gap_count;         /**< Valid successive completion intervals. */
+    uint64_t urb_gap_sum_us;        /**< Sum of callback-entry-to-entry gaps (us). */
+    uint32_t urb_gap_max_us;        /**< Maximum valid gap since counters reset. */
+    uint64_t urb_gap_over_12ms;     /**< Valid gaps longer than 12 ms. */
+    uint64_t urb_gap_over_100ms;    /**< Discontinuities excluded from averages. */
+    uint64_t urb_prestats_samples;  /**< 1-in-16 measurements of callback work. */
+    uint64_t urb_prestats_sum_us;   /**< Sum of sampled pre-stats processing (us). */
+    uint32_t urb_prestats_max_us;   /**< Peak sampled pre-stats processing (us). */
+    uint64_t urb_submit_failures;  /**< Failed bulk-IN re-submissions. */
 } usb_rtlsdr_stats_t;
 
 /* ───────────────────────────────────────────────────────────────────────────
