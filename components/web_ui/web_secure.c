@@ -50,7 +50,6 @@ static bool is_ipv4(const char *s){
         a<=255 && b<=255 && c<=255 && d<=255;
 }
 static esp_err_t save(httpd_req_t *r){
-    if(!authorized(r))return unauthorized(r);
     if(r->content_len<=0||r->content_len>1500)
         return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid body length");
     char body[1501]={0};
