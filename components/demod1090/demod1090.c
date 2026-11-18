@@ -230,33 +230,39 @@ static bool detect_preamble(const uint16_t *m, uint32_t n, uint32_t start,
 {
     const uint64_t sp_us = s_ctx.fp_samples_per_us;   /* samples/µs, fixed pt   */
 
-    /* The preamble window must fit entirely inside the buffer.                 */
-    const uint32_t window = (uint32_t)((DEMOD_PREAMBLE_US * (double)sp_us) /
-                                       (double)DEMOD_FP_ONE) + 2;
-    if (start + window >= n) {
-        return false;
+    /* No RF criteria change: at exactly 2 MS/s these are the precise rounded
+     * indices produced by the legacy 32.32 calculations. Evaluate the rate once
+     * per candidate; the common path has nine plain indexed loads instead of
+     * nine floating-point multiplications and 64-bit conversions.
+     *
+     * Pulses: 0.25, 1.25, 3.75, 4.75 us -> indices 1,3,8,10.
+     * Valleys: 2,3,5.5,6.5,7.5 us -> indices 4,6,11,13,15. */
+    uint32_t window;
+    uint32_t p0, p1, p2, p3, v0, v1, v2, v3, v4;
+    if (s_ctx.sample_rate_hz == 2000000u) {
+        window = 18u;
+        if (start + window >= n) return false;
+        const uint16_t *s = m + start;
+        p0 = s[1]; p1 = s[3]; p2 = s[8]; p3 = s[10];
+        v0 = s[4]; v1 = s[6]; v2 = s[11]; v3 = s[13]; v4 = s[15];
+    } else {
+        /* Preserve the established fractional-rate implementation unchanged. */
+        window = (uint32_t)((DEMOD_PREAMBLE_US * (double)sp_us) /
+                            (double)DEMOD_FP_ONE) + 2;
+        if (start + window >= n) return false;
+        #define MAG_AT_US(us) \
+            (m[start + (uint32_t)(((uint64_t)((us) * (double)sp_us) + (DEMOD_FP_ONE/2)) >> DEMOD_FP_SHIFT)])
+        p0 = MAG_AT_US(DEMOD_PULSE0_US + 0.25);
+        p1 = MAG_AT_US(DEMOD_PULSE1_US + 0.25);
+        p2 = MAG_AT_US(DEMOD_PULSE2_US + 0.25);
+        p3 = MAG_AT_US(DEMOD_PULSE3_US + 0.25);
+        v0 = MAG_AT_US(2.0);
+        v1 = MAG_AT_US(3.0);
+        v2 = MAG_AT_US(5.5);
+        v3 = MAG_AT_US(6.5);
+        v4 = MAG_AT_US(7.5);
+        #undef MAG_AT_US
     }
-
-    /* Helper: magnitude at a µs offset from `start`, rounded to nearest sample.*/
-    /* We inline the fixed-point conversion to dodge any float in the loop body */
-    /* after this point.                                                        */
-    #define MAG_AT_US(us) \
-        (m[start + (uint32_t)(((uint64_t)((us) * (double)sp_us) + (DEMOD_FP_ONE/2)) >> DEMOD_FP_SHIFT)])
-
-    /* The four pulse peaks: sample each pulse near its centre (leading edge +  */
-    /* a quarter-bit) so we sit on the plateau, not the rising edge.           */
-    const uint32_t p0 = MAG_AT_US(DEMOD_PULSE0_US + 0.25);
-    const uint32_t p1 = MAG_AT_US(DEMOD_PULSE1_US + 0.25);
-    const uint32_t p2 = MAG_AT_US(DEMOD_PULSE2_US + 0.25);
-    const uint32_t p3 = MAG_AT_US(DEMOD_PULSE3_US + 0.25);
-
-    /* The valleys: points that MUST be quiet in a real preamble. These sit in  */
-    /* the gaps at 2.0, 3.0, 5.5, 6.5 and 7.5 µs.                               */
-    const uint32_t v0 = MAG_AT_US(2.0);
-    const uint32_t v1 = MAG_AT_US(3.0);
-    const uint32_t v2 = MAG_AT_US(5.5);
-    const uint32_t v3 = MAG_AT_US(6.5);
-    const uint32_t v4 = MAG_AT_US(7.5);
 
     /* Sum of the four pulse magnitudes and the five valley magnitudes.         */
     const uint32_t pulse_sum  = p0 + p1 + p2 + p3;
@@ -294,7 +300,6 @@ static bool detect_preamble(const uint16_t *m, uint32_t n, uint32_t start,
     /* Proxy RSSI: the mean pulse height, capped to 16 bits.                    */
     *out_level = (uint16_t)(pulse_mean > 65535u ? 65535u : pulse_mean);
 
-    #undef MAG_AT_US
     return true;
 }
 
@@ -327,6 +332,20 @@ static int slice_bits(const uint16_t *m, uint32_t n, uint32_t start,
     memset(out_data, 0, MODES_LONG_BYTES);
 
     int bits_done = 0;
+    if (s_ctx.sample_rate_hz == 2000000u) {
+        /* Exact 2 MS/s equivalence to the legacy 32.32 bit-slicer:
+         * preamble is 16 samples, first/second half-centres round to
+         * start+17+2*b and start+18+2*b. No RF criteria changed. */
+        uint32_t first = start + 17u;
+        for (int b = 0; b < want_bits; ++b, first += 2u) {
+            if (first + 1u >= n) break;
+            if (m[first] > m[first + 1u]) {
+                out_data[b >> 3] |= (uint8_t)(1u << (7 - (b & 7)));
+            }
+            ++bits_done;
+        }
+        return bits_done;
+    }
     for (int b = 0; b < want_bits; ++b) {
 
         /* Integer sample index of this bit's first and second half centres.    */
