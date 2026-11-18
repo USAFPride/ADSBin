@@ -167,6 +167,7 @@ async function refresh(){
   const sta=d.station_connected?'Connected '+(d.station_ip||'')+' ('+d.station_rssi+' dBm)':(d.station_connecting?'Connecting':'Disconnected');
   $('connectivity').textContent='Access point: '+(d.access_point?'Active':'Off')+' · Wi-Fi station: '+sta+' · attempts '+d.wifi_attempts+' · disconnects '+d.wifi_disconnects+' · reason '+d.wifi_last_reason;
   if(d.station_connected)$('wifiTestStatus').textContent='Wi-Fi connected. DHCP: '+d.station_ip+' · RSSI: '+d.station_rssi+' dBm';
+  else if(d.wifi_attempts>=10 && !d.station_connecting)$('wifiTestStatus').textContent='Connection test failed after retries. Check SSID, password and disconnect reason '+d.wifi_last_reason+'.';
   else if(d.wifi_attempts>0)$('wifiTestStatus').textContent='Wi-Fi attempting: '+d.wifi_attempts+' · disconnects: '+d.wifi_disconnects+' · last reason: '+d.wifi_last_reason;
   $('raw').textContent=JSON.stringify(d,null,2);
  }catch(err){$('state').textContent='Web link unavailable';$('state').className='state err';}
