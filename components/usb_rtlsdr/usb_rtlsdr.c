@@ -1152,7 +1152,33 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         }
     }
     d->perf_last_cb_us = now;
-    int64_t copy_start_us = now;
+    bool early_submitted = false;
+
+    /* EXPERIMENT: when a full URB arrives, arm the OTHER DMA buffer before
+     * copying this buffer to the ring. Never re-submit or reuse the completed
+     * transfer until processing finishes. Keep one URB in flight at a time.
+     * If the host stack refuses the handoff, fall back to the known-good
+     * post-copy re-submit below, without dropping any IQ data. */
+    if (xfer->status == USB_TRANSFER_STATUS_COMPLETED) {
+        usb_transfer_t *alternate = (xfer == d->urb[0]) ? d->urb[1] : d->urb[0];
+        if (alternate != NULL) {
+            int64_t early_start_us = adsbin_now_us();
+            d->perf_pre_submit_sum_us += (uint64_t)(early_start_us - now);
+            esp_err_t early_err = usb_host_transfer_submit(alternate);
+            d->perf_submit_sum_us += (uint64_t)(adsbin_now_us() - early_start_us);
+            if (early_err == ESP_OK) {
+                early_submitted = true;
+                d->pipe_early_ok++;
+            } else if (early_err == ESP_ERR_INVALID_STATE) {
+                d->pipe_early_invalid_state++;
+            } else {
+                d->pipe_early_other_fail++;
+            }
+        }
+    }
+
+    /* Exclude the early submit attempt from the ring/diagnostic timing. */
+    int64_t copy_start_us = adsbin_now_us();
 
     switch (xfer->status) {
     case USB_TRANSFER_STATUS_COMPLETED: {
@@ -1322,10 +1348,21 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     /* Time spent in callback before the re-arm, and in the submit call itself.
      * Only integer counters here; no logging/formatting in the hot path. */
     int64_t submit_start_us = adsbin_now_us();
+    if (early_submitted) {
+        /* Do not double-submit: the alternate URB now owns the live pipe.
+         * This just-finished URB remains idle until the next completion. */
+        d->perf_count++;
+        return;
+    }
     d->perf_pre_submit_sum_us += (uint64_t)(submit_start_us - now);
     esp_err_t err = usb_host_transfer_submit(xfer);
     d->perf_submit_sum_us += (uint64_t)(adsbin_now_us() - submit_start_us);
     d->perf_count++;
+    if (err == ESP_OK) {
+        d->pipe_fallback_ok++;
+    } else {
+        d->pipe_fallback_fail++;
+    }
     if (err != ESP_OK) {
         lock();
         d->stats.urb_submit_failures++;
@@ -2312,6 +2349,19 @@ static void usb_task(void *arg)
                 d->perf_gap_max_us = 0;
                 d->perf_copy_max_us = 0;
                 d->perf_count = 0;
+                ESP_LOGW("usb_pipeline",
+                         "slot=%d EARLY_ok=%u EARLY_invalid=%u EARLY_other_fail=%u "
+                         "FALLBACK_ok=%u FALLBACK_fail=%u",
+                         i, (unsigned)d->pipe_early_ok,
+                         (unsigned)d->pipe_early_invalid_state,
+                         (unsigned)d->pipe_early_other_fail,
+                         (unsigned)d->pipe_fallback_ok,
+                         (unsigned)d->pipe_fallback_fail);
+                d->pipe_early_ok = 0;
+                d->pipe_early_invalid_state = 0;
+                d->pipe_early_other_fail = 0;
+                d->pipe_fallback_ok = 0;
+                d->pipe_fallback_fail = 0;
             }
         }
 
