@@ -121,10 +121,10 @@ static esp_err_t save(httpd_req_t *r){
             cJSON_Delete(root);return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid IPv4 address");
         }
     }
-    if(secret_requested&&!esp_flash_encryption_enabled()){
+    if(secret_requested){
         cJSON_Delete(root);
         return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,
-            "Secret storage disabled: enable device flash encryption first");
+            "Secret storage unavailable: encrypted NVS provisioning not yet implemented");
     }
     nvs_handle_t n;
     esp_err_t err=nvs_open("web_cfg",NVS_READWRITE,&n);
@@ -159,6 +159,7 @@ esp_err_t web_ui_secure_start(void){
     esp_err_t err=httpd_ssl_start(&server,&cfg);
     if(err!=ESP_OK)return err;
     const httpd_uri_t routes[]={
+        {.uri="/api/status",.method=HTTP_GET,.handler=web_ui_status_get},
         {.uri="/",.method=HTTP_GET,.handler=page},
         {.uri="/api/config",.method=HTTP_GET,.handler=metadata},
         {.uri="/api/config",.method=HTTP_POST,.handler=save}
@@ -167,7 +168,7 @@ esp_err_t web_ui_secure_start(void){
         err=httpd_register_uri_handler(server,&routes[i]);
         if(err!=ESP_OK){httpd_ssl_stop(server);server=NULL;return err;}
     }
-    ESP_LOGW(TAG,"HTTPS admin service enabled on port 443");
+    ESP_LOGW(TAG,"HTTPS admin service enabled on port 443 (non-secret settings only)");
     ESP_LOGW(TAG,"ONE-BOOT ADMIN TOKEN: %s (UART ONLY; never share logs containing this line)",admin_token);
     return ESP_OK;
 }
