@@ -18,8 +18,8 @@
 static const char *TAG = "web_ui";
 static httpd_handle_t s_server = NULL;
 static size_t (*s_aircraft_count)(void) = NULL;
-#ifdef CONFIG_ADSBIN_WEB_HTTPS_CONFIG
-extern esp_err_t web_ui_secure_start(void);
+#ifdef CONFIG_ADSBIN_WEB_HTTP_CONFIG
+extern esp_err_t web_ui_http_config_register(httpd_handle_t server);
 #endif
 extern const char index_html_start[] asm("_binary_index_html_start");
 extern const char index_html_end[] asm("_binary_index_html_end");
@@ -106,9 +106,9 @@ esp_err_t web_ui_start(size_t (*aircraft_count)(void))
         return err;
     }
     ESP_LOGI(TAG, "Read-only receiver dashboard available on HTTP port 80");
-#ifdef CONFIG_ADSBIN_WEB_HTTPS_CONFIG
-    esp_err_t secure_err=web_ui_secure_start();
-    if(secure_err!=ESP_OK)ESP_LOGE(TAG,"HTTPS configuration unavailable: %s",esp_err_to_name(secure_err));
+#ifdef CONFIG_ADSBIN_WEB_HTTP_CONFIG
+    esp_err_t secure_err=web_ui_http_config_register(s_server);
+    if(secure_err!=ESP_OK)ESP_LOGE(TAG,"HTTP bench configuration unavailable: %s",esp_err_to_name(secure_err));
 #endif
     return ESP_OK;
 }

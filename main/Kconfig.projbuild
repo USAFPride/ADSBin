@@ -1,14 +1,23 @@
 
 menu "ADSBin web management"
-    config ADSBIN_WEB_HTTPS_CONFIG
-        bool "Enable authenticated HTTPS configuration service"
+    config ADSBIN_WEB_HTTP_CONFIG
+        bool "Enable bench-only HTTP configuration of non-secret settings"
+        default y
+        help
+            Enables public, unauthenticated GET/POST /api/config on HTTP port 80.
+            Never use on an untrusted network. Credential/private-key fields
+            are rejected. Disable this for operational deployment.
+
+    config ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
+        bool "UNSAFE bench option: allow storing Wi-Fi password through HTTP"
+        depends on ADSBIN_WEB_HTTP_CONFIG
         default n
         help
-            Requires a board-unique local certificate and key at
-            components/web_ui/certs/servercert.pem and serverkey.pem.
-            A fresh admin token is printed to UART0 each boot.
-            Plaintext HTTP remains read-only. Secrets are not persisted
-            unless flash encryption is enabled on the device.
+            EXPLICIT OPT-IN ONLY. The SoftAP is open and HTTP has no TLS or
+            authentication. The password is transmitted in plaintext over
+            Wi-Fi and saved in ordinary NVS without verified encryption.
+            Use only with a disposable isolated test Wi-Fi password. NEVER
+            enable with production credentials or on an untrusted network.
 endmenu
 
 menu "ADSBin"

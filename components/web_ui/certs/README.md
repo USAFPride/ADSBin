@@ -1,55 +1,57 @@
-# ADSBin HTTPS configuration – bench provisioning
+# ADSBin HTTP bench configuration (no OpenSSL required)
 
-**Experimental draft.** Normal HTTP port 80 remains a read-only receiver dashboard.
-Configuration writes are only available on HTTPS port 443 with a short-lived admin
-token printed to UART0. Never send sensitive data over port 80.
+This branch uses the existing `ADSBin` open access point and HTTP page at
+`http://192.168.4.1/`. It requires no TLS keys, certificates, or OpenSSL.
 
-## Certificate creation on the development computer
+**WARNING:** The access point is OPEN and the configuration API has NO
+authentication. Anyone able to join the ADSBin AP can view or change the
+non-secret fields. This mode is ONLY for isolated bench testing and must
+not be used on an untrusted network or exposed to the Internet.
 
-Generate a unique, local-only certificate; do **not** commit these PEM files.
+Enabled by default for bench builds with
+`CONFIG_ADSBIN_WEB_HTTP_CONFIG=y` in menuconfig. If disabled, the
+dashboard remains available but GET/POST /api/config is not registered.
 
-In an ESP-IDF PowerShell terminal with OpenSSL available:
+Editable and persisted in NVS namespace `web_cfg`:
+- `wifi_ssid` (non-secret)
+- `beast_host` (IPv4) and `beast_port`
+- `wg_public` (WireGuard peer PUBLIC key)
+- `wg_endpoint`, `wg_ip`, `wg_port`
 
-```powershell
-cd C:\esp\projects\ADSBin
-openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -sha256 -days 365 `
-  -keyout components\web_ui\serverkey.pem `
-  -out components\web_ui\servercert.pem `
-  -subj "/CN=192.168.4.1" -addext "subjectAltName=IP:192.168.4.1"
-openssl x509 -in components\web_ui\servercert.pem -noout -fingerprint -sha256
-```
+**Optional isolated bench password test:** Enable
+`ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP=y` in `idf.py menuconfig`.
+This allows a disposable 8–63-character test Wi-Fi password in POST
+`/api/config`. The secret is stored under `wifi_pass` in ordinary NVS,
+never returned by GET, and loaded only when remote STA mode starts.
+The UI reports whether a password is present without revealing it.
+**HTTP, the AP, and NVS are unencrypted. Do not use production Wi-Fi
+credentials.** Disable this feature and erase any stored test password
+before field deployment. WireGuard PRIVATE keys and other credentials
+remain blocked. Unknown JSON fields are rejected.
 
-Validate the SHA-256 certificate fingerprint in the browser using the local
-terminal output (self-signed certificates are not publicly trusted). Do not
-upload the PEM private key or share it as part of console logs.
+Application behavior:
+- Beast destination/port override is loaded when a new TCP connection is made
+  (only in remote mode when remote transport is already enabled).
+- Wi-Fi SSID override is loaded when station mode starts; it does **not**
+  enable station mode and it does **not** set a Wi-Fi password.
+- WireGuard public fields are **staged only** and do not yet modify the active
+  VPN; private key remains configured locally at build time.
+- The UI Save action is a persistence operation, not a full dynamic Apply.
+- USB and DSP firmware paths are unchanged.
 
-Enable **ADSBin web management > Enable authenticated HTTPS configuration
-service** using `idf.py menuconfig`, then `idf.py build` and flash COM5.
+To test, build and flash the branch to COM5, join ADSBin AP, visit the
+dashboard, select Network, edit `beast_host` and `beast_port`, click
+Save, refresh page, and verify persistence. Reboot and verify persistence
+again. Inspect `http://192.168.4.1/api/config` if debugging.
 
-The firmware prints a fresh 32-character ADMIN TOKEN in the serial console
-for each boot. Treat it as a password; redact it from shared logs.
-Join the ADSBin access point and browse to **https://192.168.4.1/**.
+Do not merge until build succeeds and 1090 MHz RF throughput/aircraft
+decoding remain stable during HTTP operations. When secure provisioning is
+available, disable this open HTTP configuration endpoint.
 
-The open HTTP dashboard will continue to run at http://192.168.4.1/.
-Only the HTTPS page can load/save settings. This is a developer-only admin
-interface: no session persistence, no rate limiting, no password recovery.
+## Confirm Save works
 
-## Storage and apply behavior
-
-- Editable now: Wi-Fi SSID; Beast IPv4 and port; WireGuard peer PUBLIC key,
-  endpoint, tunnel IPv4 and port.
-- Values persist in the existing NVS namespace `web_cfg`. Beast destination
-  overrides are read on the next TCP connection, including after reboot.
-  An SSID override is read when STA starts; STA mode itself still requires the
-  existing build-time remote-enable flag. Wi-Fi password remains compiled/local.
-- **Not supported yet:** Wi-Fi password and WireGuard client PRIVATE key.
-  They are deliberately blocked even on HTTPS because the current ordinary
-  NVS partition has no verified NVS-encryption provisioning. Flash encryption
-  alone does not prove NVS encryption was initialized. Do not provision real
-  secrets to this revision.
-- VPN public settings are staged only; WireGuard currently reads compiled
-  settings until NVS runtime integration is implemented.
-- No automatic reboot or Wi-Fi mode change on Save. These are follow-up features.
-
-Do not merge or deploy the feature branch until a successful device build and
-aircraft reception test verifies that HTTPS does not starve the RF pipeline.
+On the bench page, enter a harmless non-secret Beast host/port and press Save.
+The status text should state `Saved in NVS (server confirmed)`.
+Reload the page and confirm the same fields reappear, then reboot the board
+and check once more. Directly visit `http://192.168.4.1/api/config` to
+inspect saved non-secret fields. The Wi-Fi password is never included.
