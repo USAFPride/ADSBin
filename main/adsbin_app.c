@@ -130,6 +130,30 @@ static void rf_diag_task(void *arg)
                  (unsigned)u.iq_min_i, (unsigned)u.iq_max_i,
                  (unsigned)u.iq_min_q, (unsigned)u.iq_max_q,
                  (unsigned long)u.iq_sample_pairs);
+        /* Instrumentation on the 1090 USB device only. The 12 ms threshold is
+         * above the 8.192 ms ideal spacing of 32 KiB at 2.0 MS/s. Intervals
+         * >=100 ms are reported separately, not averaged (e.g. recovery). */
+        const uint64_t completed = u.urb_completions - prev_usb.urb_completions;
+        const uint64_t gaps = u.urb_gap_count - prev_usb.urb_gap_count;
+        const uint64_t gap_us = u.urb_gap_sum_us - prev_usb.urb_gap_sum_us;
+        const uint64_t sampled = u.urb_prestats_samples - prev_usb.urb_prestats_samples;
+        const uint64_t prestats_us = u.urb_prestats_sum_us - prev_usb.urb_prestats_sum_us;
+        ESP_LOGW("usb_perf",
+                 "URB/10s=%llu USB_input_B/10s=%llu SHORT/10s=%llu "
+                 "GAP_avg_us=%llu GAP_max_seen_us=%lu GAP_over12ms/10s=%llu "
+                 "GAP_over100ms/10s=%llu PRESTATS_avg_us=%llu PRESTATS_max_seen_us=%lu "
+                 "PRESTATS_n/10s=%llu RESUBMIT_fail/10s=%llu",
+                 (unsigned long long)completed,
+                 (unsigned long long)(u.urb_input_bytes - prev_usb.urb_input_bytes),
+                 (unsigned long long)(u.urb_short_transfers - prev_usb.urb_short_transfers),
+                 (unsigned long long)(gaps ? gap_us / gaps : 0),
+                 (unsigned long)u.urb_gap_max_us,
+                 (unsigned long long)(u.urb_gap_over_12ms - prev_usb.urb_gap_over_12ms),
+                 (unsigned long long)(u.urb_gap_over_100ms - prev_usb.urb_gap_over_100ms),
+                 (unsigned long long)(sampled ? prestats_us / sampled : 0),
+                 (unsigned long)u.urb_prestats_max_us,
+                 (unsigned long long)sampled,
+                 (unsigned long long)(u.urb_submit_failures - prev_usb.urb_submit_failures));
         prev_usb = u;
         prev_demod = d;
     }
