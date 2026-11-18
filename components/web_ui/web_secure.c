@@ -17,9 +17,9 @@ static esp_err_t metadata(httpd_req_t *r){
     if(nvs_open("web_cfg",NVS_READONLY,&n)!=ESP_OK){
         httpd_resp_set_type(r,"application/json");
 #ifdef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
-        return httpd_resp_sendstr(r,"{\\"stored\\":false,\\"wifi_password_entry_enabled\\":true}");
+        return httpd_resp_sendstr(r,"{\"stored\":false,\"wifi_password_entry_enabled\":true}");
 #else
-        return httpd_resp_sendstr(r,"{\\"stored\\":false,\\"wifi_password_entry_enabled\\":false}");
+        return httpd_resp_sendstr(r,"{\"stored\":false,\"wifi_password_entry_enabled\":false}");
 #endif
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port","wg_public",
