@@ -113,7 +113,7 @@ menu "Remote ADS-B receiver (experimental)"
         depends on ADSBIN_REMOTE_ENABLE
     config ADSBIN_REMOTE_HOST
         string "Beast destination IPv4 (LAN test only)"
-        default "192.168.107.20"
+        default ""
         depends on ADSBIN_REMOTE_ENABLE
     config ADSBIN_REMOTE_PORT
         int "Beast TCP port"
@@ -137,6 +137,10 @@ menu "Remote WireGuard (experimental: P4 port required)"
         depends on ADSBIN_REMOTE_ENABLE
         depends on !ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
         default n
+        help
+            WireGuard is optional for LAN testing. The provisioning UI must
+            keep it disabled unless explicitly enabled by the operator.
+            Never commit configured keys, endpoints or network addresses.
     config ADSBIN_WG_PRIVATE_KEY
         string "Client private key - local sdkconfig ONLY"
         default ""
@@ -147,7 +151,7 @@ menu "Remote WireGuard (experimental: P4 port required)"
         depends on ADSBIN_REMOTE_WIREGUARD
     config ADSBIN_WG_LOCAL_IP
         string "Tunnel IPv4 /32"
-        default "10.50.0.20"
+        default ""
         depends on ADSBIN_REMOTE_WIREGUARD
     config ADSBIN_WG_ENDPOINT
         string "WireGuard server DNS name or IPv4"
