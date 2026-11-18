@@ -47,14 +47,14 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 </section>
 <section id="network" hidden>
 <div class="panel"><h2>Wi-Fi and Beast TCP configuration</h2>
-<div class="notice">Bench mode: non-secret settings are saved over HTTP without authentication. Anyone connected to this access point can modify them. Never use this on an untrusted network. Wi-Fi password and WireGuard private key saving remain disabled.</div>
+<div class="notice">Bench-only HTTP: this access point is open. If password entry is enabled in firmware, the Wi-Fi password travels over unencrypted HTTP and is stored in unencrypted NVS. Use only a disposable test-network password, never production credentials. WireGuard private-key entry remains disabled.</div>
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
-<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Unavailable: encrypted NVS pending" disabled></div>
+<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Bench option disabled in firmware" disabled><p id="wifiPassState" class="small">Checking password setting…</p></div>
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
 </div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
-<p id="networkSaveNotice" class="small"></p><button id="saveNetwork" class="primary" type="button">Save non-secret settings</button>
+<p id="networkSaveNotice" class="small"></p><button id="saveNetwork" class="primary" type="button">Save settings</button>
 </div></section>
 <section id="wireguard" hidden>
 <div class="panel"><h2>WireGuard client</h2>
@@ -95,6 +95,12 @@ async function loadSettings(){
   const maps={wifi_ssid:'ssid',beast_host:'beastHost',beast_port:'beastPort',
               wg_public:'wgPub',wg_endpoint:'wgEndpoint',wg_ip:'wgIP',wg_port:'wgPort'};
   Object.keys(maps).forEach(k=>{if(config[k]!==undefined)$(maps[k]).value=config[k];});
+  const canSavePassword=!!config.wifi_password_entry_enabled;
+  $('wifiPass').disabled=!canSavePassword;
+  $('wifiPass').placeholder=canSavePassword?'Enter new test password (8–63 chars); blank keeps existing':'Enable unsafe bench password option in menuconfig';
+  $('wifiPassState').textContent=(config.wifi_password_configured?'Password saved; value hidden. ':'No saved password. ')+
+    (canSavePassword?'Use only disposable test credentials.':'Password entry is disabled in firmware.');
+
  }catch(e){
   $('networkSaveNotice').textContent='Unable to load saved settings: '+e.message;
  }
@@ -105,14 +111,30 @@ async function saveSettings(payload,noticeId){
   const resp=await fetch('/api/config',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   if(!resp.ok){const t=await resp.text();throw Error('HTTP '+resp.status+' '+t.slice(0,160));}
-  $(noticeId).textContent='Saved in NVS. Beast settings apply at the next TCP connection; SSID at STA startup. Public WireGuard fields are staged only.';
- }catch(e){$(noticeId).textContent='Save failed: '+e.message;}
+  const result=await resp.json();
+  $(noticeId).textContent='Saved in NVS (server confirmed). Wi-Fi settings apply at STA startup; Beast settings at next TCP connect; WireGuard public fields are staged only.';
+  return result.saved===true;
+ }catch(e){$(noticeId).textContent='Save failed: '+e.message;return false;}
 }
-$('saveNetwork').addEventListener('click',()=>saveSettings({
- wifi_ssid:$('ssid').value.trim(),
- beast_host:$('beastHost').value.trim(),
- beast_port:$('beastPort').value.trim()
-},'networkSaveNotice'));
+$('saveNetwork').addEventListener('click',async ()=>{
+ const password=$('wifiPass').value;
+ const payload={
+  wifi_ssid:$('ssid').value.trim(),
+  beast_host:$('beastHost').value.trim(),
+  beast_port:$('beastPort').value.trim()
+ };
+ if(password){
+  if($('wifiPass').disabled){$('networkSaveNotice').textContent='Password entry is disabled';return;}
+  if(password.length<8||password.length>63){$('networkSaveNotice').textContent='Password must have 8–63 characters';return;}
+  if(!confirm('Bench-only: send this test Wi-Fi password over unencrypted HTTP and store it in unencrypted NVS?'))return;
+  payload.wifi_pass=password;
+ }
+ const saved=await saveSettings(payload,'networkSaveNotice');
+ if(saved){
+  $('wifiPass').value='';
+  await loadSettings();
+ }
+});
 $('saveWireGuard').addEventListener('click',()=>saveSettings({
  wg_public:$('wgPub').value.trim(),
  wg_endpoint:$('wgEndpoint').value.trim(),
