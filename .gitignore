@@ -23,3 +23,4 @@ PERF_OVERHAUL_PLAN.md
 
 # Per-device web admin certificate/private key: never commit
 components/web_ui/certs/*.pem
+components/web_ui/*.pem
