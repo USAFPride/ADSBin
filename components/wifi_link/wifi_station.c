@@ -23,6 +23,8 @@ static volatile bool s_initialized;
 static volatile bool s_connected;
 static volatile bool s_connecting;
 static volatile bool s_test_running;
+static volatile bool s_reconfiguring;
+static volatile int s_rssi;
 static volatile uint32_t s_disconnects, s_last_reason, s_attempts;
 static char s_ip[16];
 
@@ -91,7 +93,7 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_last_reason = info ? info->reason : 0;
         ESP_LOGW(TAG, "STA disconnected reason=%lu, count=%lu",
                  (unsigned long)s_last_reason, (unsigned long)s_disconnects);
-        if (s_initialized) try_connect();
+        if (s_initialized && !s_reconfiguring) try_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
         s_connected = false;
         s_connecting = false;
@@ -104,7 +106,9 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
         if (got) snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&got->ip_info.ip));
         s_connected = true;
         s_connecting = false;
-        ESP_LOGI(TAG, "STA DHCP IPv4=%s (AP remains active in bench mode)", s_ip);
+        wifi_ap_record_t ap = {0};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) s_rssi = ap.rssi;
+        ESP_LOGI(TAG, "STA DHCP IPv4=%s RSSI=%d dBm", s_ip, (int)s_rssi);
     }
 }
 
@@ -179,6 +183,7 @@ static void station_test_worker(void *arg)
     if (!read_credentials(&cfg)) {
         ESP_LOGW(TAG, "Test rejected: no Wi-Fi SSID saved");
     } else {
+        s_reconfiguring = true;
         s_connecting = true;
         s_connected = false;
         s_ip[0] = 0;
@@ -186,6 +191,7 @@ static void station_test_worker(void *arg)
         (void)esp_wifi_disconnect();
         esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
         memset(&cfg, 0, sizeof(cfg));
+        s_reconfiguring = false;
         if (err == ESP_OK) try_connect();
         else {
             s_connecting = false;
@@ -222,8 +228,5 @@ void wifi_station_get_snapshot(wifi_station_snapshot_t *out)
     out->last_reason = s_last_reason;
     out->attempts = s_attempts;
     memcpy(out->ip, s_ip, sizeof(out->ip));
-    if (out->connected) {
-        wifi_ap_record_t ap = {0};
-        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) out->rssi = ap.rssi;
-    }
+    out->rssi = s_rssi;
 }
