@@ -8,6 +8,8 @@
 #include "freertos/task.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
+#include "nvs.h"
+#include <stdlib.h>
 #include <errno.h>
 #include <string.h>
 #include <unistd.h>
@@ -59,9 +61,35 @@ static void sender(void *arg)
             continue;
         }
 #endif
+        /* Read validated, non-secret destination overrides once per connection.
+         * Existing Kconfig defaults remain in effect if nothing was saved.
+         * A reboot or reconnect applies a newly saved destination. */
+        char beast_host[48] = CONFIG_ADSBIN_REMOTE_HOST;
+        uint16_t beast_port = CONFIG_ADSBIN_REMOTE_PORT;
+        nvs_handle_t prefs;
+        if (nvs_open("web_cfg", NVS_READONLY, &prefs) == ESP_OK) {
+            char saved_host[48] = {0};
+            size_t host_len = sizeof(saved_host);
+            if (nvs_get_str(prefs, "beast_host", saved_host, &host_len) == ESP_OK &&
+                saved_host[0] != '\0') {
+                struct in_addr probe;
+                if (inet_pton(AF_INET, saved_host, &probe) == 1) {
+                    memcpy(beast_host, saved_host, sizeof(beast_host));
+                }
+            }
+            char saved_port[8] = {0};
+            size_t port_len = sizeof(saved_port);
+            if (nvs_get_str(prefs, "beast_port", saved_port, &port_len) == ESP_OK) {
+                char *end = NULL;
+                long port = strtol(saved_port, &end, 10);
+                if (end && *end == '\0' && port >= 1 && port <= 65535)
+                    beast_port = (uint16_t)port;
+            }
+            nvs_close(prefs);
+        }
         struct sockaddr_in target = { .sin_family = AF_INET,
-            .sin_port = htons(CONFIG_ADSBIN_REMOTE_PORT) };
-        if (inet_pton(AF_INET, CONFIG_ADSBIN_REMOTE_HOST, &target.sin_addr) != 1) {
+            .sin_port = htons(beast_port) };
+        if (inet_pton(AF_INET, beast_host, &target.sin_addr) != 1) {
             ESP_LOGE(TAG, "Destination must be an IPv4 address");
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;

@@ -5,5 +5,5 @@
 idf_component_register(
     SRCS "remote_beast.c" "remote_wireguard.c"
     INCLUDE_DIRS "include"
-    REQUIRES common freertos lwip wifi_link esphome__wireguard
+    REQUIRES common freertos lwip wifi_link esphome__wireguard nvs_flash
 )

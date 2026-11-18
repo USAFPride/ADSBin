@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "nvs.h"
 #include "esp_netif_ip_addr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -64,8 +65,21 @@ static void station_event(void *ctx, esp_event_base_t base, int32_t event, void 
 esp_err_t wifi_station_start(void)
 {
     if (s_started) return ESP_OK;
-    if (CONFIG_ADSBIN_REMOTE_WIFI_SSID[0] == '\0') {
-        ESP_LOGE(TAG, "Set remote Wi-Fi SSID in menuconfig");
+    /* Saved SSID is non-secret, and can override the compiled default.
+     * Password provisioning remains local-only until NVS encryption is ready. */
+    char station_ssid[33] = CONFIG_ADSBIN_REMOTE_WIFI_SSID;
+    nvs_handle_t prefs;
+    if (nvs_open("web_cfg", NVS_READONLY, &prefs) == ESP_OK) {
+        size_t length = sizeof(station_ssid);
+        char saved_ssid[33] = {0};
+        if (nvs_get_str(prefs, "wifi_ssid", saved_ssid, &length) == ESP_OK &&
+            saved_ssid[0] != '\0') {
+            memcpy(station_ssid, saved_ssid, sizeof(station_ssid));
+        }
+        nvs_close(prefs);
+    }
+    if (station_ssid[0] == '\0') {
+        ESP_LOGE(TAG, "Set remote Wi-Fi SSID in menuconfig or HTTPS settings");
         return ESP_ERR_INVALID_ARG;
     }
     esp_err_t err = esp_netif_init();
@@ -81,9 +95,9 @@ esp_err_t wifi_station_start(void)
     if ((err = esp_wifi_set_mode(WIFI_MODE_STA)) != ESP_OK) return err;
     wifi_config_t cfg = {0};
     /* Copy fixed-length credentials without logging them. */
-    size_t ssid_len = strnlen(CONFIG_ADSBIN_REMOTE_WIFI_SSID, sizeof(cfg.sta.ssid));
+    size_t ssid_len = strnlen(station_ssid, sizeof(cfg.sta.ssid));
     size_t password_len = strnlen(CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, sizeof(cfg.sta.password));
-    memcpy(cfg.sta.ssid, CONFIG_ADSBIN_REMOTE_WIFI_SSID, ssid_len);
+    memcpy(cfg.sta.ssid, station_ssid, ssid_len);
     memcpy(cfg.sta.password, CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, password_len);
     cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     if ((err = esp_wifi_set_config(WIFI_IF_STA, &cfg)) != ESP_OK) return err;

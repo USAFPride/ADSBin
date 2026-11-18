@@ -1,3 +1,16 @@
+
+menu "ADSBin web management"
+    config ADSBIN_WEB_HTTPS_CONFIG
+        bool "Enable authenticated HTTPS configuration service"
+        default n
+        help
+            Requires a board-unique local certificate and key at
+            components/web_ui/certs/servercert.pem and serverkey.pem.
+            A fresh admin token is printed to UART0 each boot.
+            Plaintext HTTP remains read-only. Secrets are not persisted
+            unless flash encryption is enabled on the device.
+endmenu
+
 menu "ADSBin"
 
     config ADSBIN_STATUS_LED_GPIO
