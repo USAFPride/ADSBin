@@ -1179,6 +1179,9 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         uint8_t min_i = 255, max_i = 0, min_q = 255, max_q = 0;
         const bool sample_iq = (d == &s_ctx.dev[0]) &&
                                ((++s_diag_urb_counter & 63u) == 0u);
+        /* Profile 1 in 16 device-0 transfers to minimize hot-path overhead. */
+        const bool sample_prestats = (d == &s_ctx.dev[0]) &&
+                                     ((s_diag_urb_counter & 15u) == 0u);
         if (sample_iq) {
             for (uint32_t k = 0; k + 1 < len; k += 32u) {
                 const uint8_t i = data[k], q = data[k + 1];
@@ -1190,6 +1193,14 @@ static void bulk_in_cb(usb_transfer_t *xfer)
             }
         }
 
+        /* Callback-entry spacing includes USB activity, host scheduling and
+         * the previous callback's processing. It is NOT a hardware RF clock. */
+        const int64_t gap_us = d->last_block_us > 0 ? now - d->last_block_us : 0;
+        /* Sample only the IQ copy/diagnostic portion, before taking the lock
+         * and before re-submitting the URB. This is not total callback duration. */
+        const uint32_t prestats_us = sample_prestats ?
+                                     (uint32_t)(adsbin_now_us() - now) : 0u;
+
         /* Roll the throughput + overflow counters in one short locked section.
          * total_bytes/total_blocks count what actually reached the ring (matches
          * iq_block_t.seq on the consumer side); overflow_drops counts the rest.
@@ -1198,6 +1209,25 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         d->stats.total_bytes    += bytes_here;
         d->stats.total_blocks   += delivered_here;
         d->stats.overflow_drops += dropped_here;
+        d->stats.urb_completions++;
+        d->stats.urb_input_bytes += len;
+        if (len < xfer->num_bytes) d->stats.urb_short_transfers++;
+        if (gap_us > 0 && gap_us < 100000) {
+            const uint32_t g = (uint32_t)gap_us;
+            d->stats.urb_gap_count++;
+            d->stats.urb_gap_sum_us += g;
+            if (g > d->stats.urb_gap_max_us) d->stats.urb_gap_max_us = g;
+            if (g > 12000u) d->stats.urb_gap_over_12ms++;
+        } else if (gap_us >= 100000) {
+            /* A restream or long stall must not distort the steady-state average. */
+            d->stats.urb_gap_over_100ms++;
+        }
+        if (sample_prestats) {
+            d->stats.urb_prestats_samples++;
+            d->stats.urb_prestats_sum_us += prestats_us;
+            if (prestats_us > d->stats.urb_prestats_max_us)
+                d->stats.urb_prestats_max_us = prestats_us;
+        }
         if (diag_pairs) {
             d->stats.iq_min_i = min_i;
             d->stats.iq_max_i = max_i;
@@ -1275,6 +1305,9 @@ static void bulk_in_cb(usb_transfer_t *xfer)
      * re-arm failed. The restream re-submits the URB pool in place. */
     esp_err_t err = usb_host_transfer_submit(xfer);
     if (err != ESP_OK) {
+        lock();
+        d->stats.urb_submit_failures++;
+        unlock();
         d->urbs_inflight--;
         d->do_restream = true;
         if (s_ctx.task) {
