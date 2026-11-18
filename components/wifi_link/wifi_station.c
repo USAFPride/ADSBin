@@ -9,6 +9,7 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi.h"
+#include "esp_netif_ip_addr.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -16,19 +17,47 @@
 static const char *TAG = "wifi_station";
 static volatile bool s_connected = false;
 static bool s_started = false;
+static uint32_t s_disconnect_count = 0;
 
+/* Runs in the normal ESP event task, not in the USB or DSP hot path.
+ * Only mark the link usable once DHCP has supplied an address. */
 static void station_event(void *ctx, esp_event_base_t base, int32_t event, void *data)
 {
-    (void)ctx; (void)data;
+    (void)ctx;
     if (base == WIFI_EVENT && event == WIFI_EVENT_STA_START) {
-        esp_wifi_connect();
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) ESP_LOGW(TAG, "Initial connect request failed: %s", esp_err_to_name(err));
+    } else if (base == WIFI_EVENT && event == WIFI_EVENT_STA_CONNECTED) {
+        ESP_LOGI(TAG, "Associated with access point; awaiting DHCP");
     } else if (base == WIFI_EVENT && event == WIFI_EVENT_STA_DISCONNECTED) {
         s_connected = false;
-        ESP_LOGW(TAG, "Wi-Fi disconnected; reconnecting");
-        esp_wifi_connect();
+        ++s_disconnect_count;
+        const wifi_event_sta_disconnected_t *info = (const wifi_event_sta_disconnected_t *)data;
+        unsigned reason = info ? (unsigned)info->reason : 0u;
+        ESP_LOGW(TAG, "Disconnected reason=%u count=%lu; requesting reconnect",
+                 reason, (unsigned long)s_disconnect_count);
+        esp_err_t err = esp_wifi_connect();
+        if (err != ESP_OK) ESP_LOGW(TAG, "Reconnect request failed: %s", esp_err_to_name(err));
+    } else if (base == WIFI_EVENT && event == WIFI_EVENT_STA_STOP) {
+        s_connected = false;
+        ESP_LOGW(TAG, "Wi-Fi station stopped");
+    } else if (base == IP_EVENT && event == IP_EVENT_STA_LOST_IP) {
+        s_connected = false;
+        ESP_LOGW(TAG, "Station lost IPv4 address");
     } else if (base == IP_EVENT && event == IP_EVENT_STA_GOT_IP) {
+        const ip_event_got_ip_t *ip = (const ip_event_got_ip_t *)data;
         s_connected = true;
-        ESP_LOGI(TAG, "Wi-Fi station received IP address");
+        if (ip) {
+            ESP_LOGI(TAG, "DHCP IPv4=" IPSTR " gateway=" IPSTR " mask=" IPSTR,
+                     IP2STR(&ip->ip_info.ip), IP2STR(&ip->ip_info.gw),
+                     IP2STR(&ip->ip_info.netmask));
+        }
+        wifi_ap_record_t ap = {0};
+        if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) {
+            ESP_LOGI(TAG, "Connected SSID=%s RSSI=%d dBm channel=%u",
+                     (const char *)ap.ssid, (int)ap.rssi, (unsigned)ap.primary);
+        }
+        ESP_LOGI(TAG, "Wi-Fi ready; reconnect count=%lu", (unsigned long)s_disconnect_count);
     }
 }
 
@@ -48,10 +77,14 @@ esp_err_t wifi_station_start(void)
     if ((err = esp_wifi_init(&init)) != ESP_OK) return err;
     if ((err = esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, station_event, NULL)) != ESP_OK) return err;
     if ((err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, station_event, NULL)) != ESP_OK) return err;
+    if ((err = esp_event_handler_register(IP_EVENT, IP_EVENT_STA_LOST_IP, station_event, NULL)) != ESP_OK) return err;
     if ((err = esp_wifi_set_mode(WIFI_MODE_STA)) != ESP_OK) return err;
     wifi_config_t cfg = {0};
-    strncpy((char *)cfg.sta.ssid, CONFIG_ADSBIN_REMOTE_WIFI_SSID, sizeof(cfg.sta.ssid));
-    strncpy((char *)cfg.sta.password, CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, sizeof(cfg.sta.password));
+    /* Copy fixed-length credentials without logging them. */
+    size_t ssid_len = strnlen(CONFIG_ADSBIN_REMOTE_WIFI_SSID, sizeof(cfg.sta.ssid));
+    size_t password_len = strnlen(CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, sizeof(cfg.sta.password));
+    memcpy(cfg.sta.ssid, CONFIG_ADSBIN_REMOTE_WIFI_SSID, ssid_len);
+    memcpy(cfg.sta.password, CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, password_len);
     cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     if ((err = esp_wifi_set_config(WIFI_IF_STA, &cfg)) != ESP_OK) return err;
     if ((err = esp_wifi_start()) != ESP_OK) return err;
