@@ -65,9 +65,10 @@ static void station_event(void *ctx, esp_event_base_t base, int32_t event, void 
 esp_err_t wifi_station_start(void)
 {
     if (s_started) return ESP_OK;
-    /* Saved SSID is non-secret, and can override the compiled default.
-     * Password provisioning remains local-only until NVS encryption is ready. */
+    /* Read saved SSID, and bench password if explicitly permitted.
+     * Credentials remain in ordinary NVS without encryption: bench only. */
     char station_ssid[33] = CONFIG_ADSBIN_REMOTE_WIFI_SSID;
+    char station_password[65] = CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD;
     nvs_handle_t prefs;
     if (nvs_open("web_cfg", NVS_READONLY, &prefs) == ESP_OK) {
         size_t length = sizeof(station_ssid);
@@ -76,10 +77,19 @@ esp_err_t wifi_station_start(void)
             saved_ssid[0] != '\0') {
             memcpy(station_ssid, saved_ssid, sizeof(station_ssid));
         }
+#ifdef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
+        size_t pw_length = sizeof(station_password);
+        char saved_password[65] = {0};
+        if (nvs_get_str(prefs, "wifi_pass", saved_password, &pw_length) == ESP_OK &&
+            saved_password[0] != '\0') {
+            memcpy(station_password, saved_password, sizeof(station_password));
+        }
+        memset(saved_password, 0, sizeof(saved_password));
+#endif
         nvs_close(prefs);
     }
     if (station_ssid[0] == '\0') {
-        ESP_LOGE(TAG, "Set remote Wi-Fi SSID in menuconfig or HTTPS settings");
+        ESP_LOGE(TAG, "Set remote Wi-Fi SSID in menuconfig or web settings");
         return ESP_ERR_INVALID_ARG;
     }
     esp_err_t err = esp_netif_init();
@@ -96,9 +106,10 @@ esp_err_t wifi_station_start(void)
     wifi_config_t cfg = {0};
     /* Copy fixed-length credentials without logging them. */
     size_t ssid_len = strnlen(station_ssid, sizeof(cfg.sta.ssid));
-    size_t password_len = strnlen(CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, sizeof(cfg.sta.password));
+    size_t password_len = strnlen(station_password, sizeof(cfg.sta.password));
     memcpy(cfg.sta.ssid, station_ssid, ssid_len);
-    memcpy(cfg.sta.password, CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD, password_len);
+    memcpy(cfg.sta.password, station_password, password_len);
+    memset(station_password, 0, sizeof(station_password));
     cfg.sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
     if ((err = esp_wifi_set_config(WIFI_IF_STA, &cfg)) != ESP_OK) return err;
     if ((err = esp_wifi_start()) != ESP_OK) return err;
