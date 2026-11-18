@@ -20,3 +20,6 @@ PERF_OVERHAUL_PLAN.md
 
 # Third-party WireGuard port is installed locally until reviewed/pinned.
 /components/esp_wireguard/
+
+# Per-device web admin certificate/private key: never commit
+components/web_ui/certs/*.pem
