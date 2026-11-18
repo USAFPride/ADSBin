@@ -2283,6 +2283,9 @@ static void usb_task(void *arg)
      * Per-device last-seen seq + the timestamp we last saw it advance. */
     uint32_t wd_last_seq[RTLSDR_MAX_DEVICES] = {0};
     int64_t  wd_last_progress_us[RTLSDR_MAX_DEVICES] = {0};
+    /* Diagnostic experiment: periodically allow IDLE0 to feed its task WDT
+     * without imposing a one-tick sleep after every completed USB URB. */
+    int64_t last_idle_yield_us = adsbin_now_us();
     int64_t  last_perf_log_us = 0;
 
     while (s_ctx.task_run) {
@@ -2412,13 +2415,16 @@ static void usb_task(void *arg)
             }
         }
 
-        /* Yield a tick so the Core-0 IDLE task runs and the task watchdog is fed.
-         * Once real IQ flows at ~4.8 MB/s, usb_host_client_handle_events() always
-         * has work pending and returns immediately, so without this explicit yield
-         * the pump loop never blocks and IDLE0 starves (task_wdt on IDLE0). One
-         * tick is negligible against the bulk cadence but guarantees forward
-         * progress for lower-priority work. */
-        vTaskDelay(1);
+        /* TEST ONLY: cap forced one-tick sleeps at once per 5 ms rather than
+         * once per USB host event loop. The client/event handlers above still
+         * block normally when they have no work. This gives IDLE0 regular run
+         * opportunities while removing a potential 1 ms delay per completed URB.
+         * Restore v2 immediately on watchdog/reset, DSP drops or stalled IQ. */
+        int64_t idle_now_us = adsbin_now_us();
+        if (idle_now_us - last_idle_yield_us >= 5000) {
+            last_idle_yield_us = idle_now_us;
+            vTaskDelay(1);
+        }
     }
 
     s_ctx.task_alive = false;
