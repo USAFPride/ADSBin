@@ -1143,6 +1143,17 @@ static void bulk_in_cb(usb_transfer_t *xfer)
 
     int64_t now = adsbin_now_us();
 
+    /* Entry-to-entry gap includes USB/DWC scheduling and host task latency. */
+    if (d->perf_last_cb_us > 0 && now > d->perf_last_cb_us) {
+        uint64_t gap = (uint64_t)(now - d->perf_last_cb_us);
+        d->perf_gap_sum_us += gap;
+        if (gap > d->perf_gap_max_us) {
+            d->perf_gap_max_us = (gap > UINT32_MAX) ? UINT32_MAX : (uint32_t)gap;
+        }
+    }
+    d->perf_last_cb_us = now;
+    int64_t copy_start_us = now;
+
     switch (xfer->status) {
     case USB_TRANSFER_STATUS_COMPLETED: {
         const uint8_t *data = xfer->data_buffer;
@@ -1200,6 +1211,11 @@ static void bulk_in_cb(usb_transfer_t *xfer)
          * and before re-submitting the URB. This is not total callback duration. */
         const uint32_t prestats_us = sample_prestats ?
                                      (uint32_t)(adsbin_now_us() - now) : 0u;
+
+        /* Ring acquire/copy/complete duration, excluding the stats lock. */
+        uint32_t copy_us = (uint32_t)(adsbin_now_us() - copy_start_us);
+        d->perf_copy_sum_us += copy_us;
+        if (copy_us > d->perf_copy_max_us) d->perf_copy_max_us = copy_us;
 
         /* Roll the throughput + overflow counters in one short locked section.
          * total_bytes/total_blocks count what actually reached the ring (matches
@@ -1303,7 +1319,13 @@ static void bulk_in_cb(usb_transfer_t *xfer)
      * LIGHT restream rather than a full teardown — this is the path that, with a
      * single in-flight URB, used to silently kill the stream forever once the lone
      * re-arm failed. The restream re-submits the URB pool in place. */
+    /* Time spent in callback before the re-arm, and in the submit call itself.
+     * Only integer counters here; no logging/formatting in the hot path. */
+    int64_t submit_start_us = adsbin_now_us();
+    d->perf_pre_submit_sum_us += (uint64_t)(submit_start_us - now);
     esp_err_t err = usb_host_transfer_submit(xfer);
+    d->perf_submit_sum_us += (uint64_t)(adsbin_now_us() - submit_start_us);
+    d->perf_count++;
     if (err != ESP_OK) {
         lock();
         d->stats.urb_submit_failures++;
@@ -2224,6 +2246,7 @@ static void usb_task(void *arg)
      * Per-device last-seen seq + the timestamp we last saw it advance. */
     uint32_t wd_last_seq[RTLSDR_MAX_DEVICES] = {0};
     int64_t  wd_last_progress_us[RTLSDR_MAX_DEVICES] = {0};
+    int64_t  last_perf_log_us = 0;
 
     while (s_ctx.task_run) {
 
@@ -2258,6 +2281,37 @@ static void usb_task(void *arg)
                          (unsigned)heap_caps_get_free_size(MALLOC_CAP_DEFAULT),
                          (unsigned)heap_caps_get_minimum_free_size(MALLOC_CAP_DEFAULT),
                          (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+            }
+        }
+
+        /* Every 10s, report precise callback timing without logging inside the
+         * completion callback. The same usb_task executes both paths, so the
+         * snapshots cannot race another callback on this task. */
+        int64_t perf_now = adsbin_now_us();
+        if (perf_now - last_perf_log_us >= 10000000) {
+            last_perf_log_us = perf_now;
+            for (int i = 0; i < (int)RTLSDR_MAX_DEVICES; i++) {
+                usb_rtlsdr_dev_t *d = &s_ctx.dev[i];
+                uint32_t n = d->perf_count;
+                if (n == 0) continue;
+                ESP_LOGW("usb_cbtime",
+                         "slot=%d n=%u GAP_avg_us=%llu GAP_max_us=%u "
+                         "RING_avg_us=%llu RING_max_us=%u "
+                         "PRESUBMIT_avg_us=%llu SUBMIT_avg_us=%llu",
+                         i, (unsigned)n,
+                         (unsigned long long)(d->perf_gap_sum_us / n),
+                         (unsigned)d->perf_gap_max_us,
+                         (unsigned long long)(d->perf_copy_sum_us / n),
+                         (unsigned)d->perf_copy_max_us,
+                         (unsigned long long)(d->perf_pre_submit_sum_us / n),
+                         (unsigned long long)(d->perf_submit_sum_us / n));
+                d->perf_gap_sum_us = 0;
+                d->perf_copy_sum_us = 0;
+                d->perf_pre_submit_sum_us = 0;
+                d->perf_submit_sum_us = 0;
+                d->perf_gap_max_us = 0;
+                d->perf_copy_max_us = 0;
+                d->perf_count = 0;
             }
         }
 
