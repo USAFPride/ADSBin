@@ -1,10 +1,14 @@
 name: ESP32-P4 remote receiver build
 on:
   push:
-    branches: [feature/remote-adsb-wireguard]
+    branches: [feature/wireguard-integration]
   pull_request:
-    branches: [main]
+    branches: [feature/remote-adsb-wireguard]
   workflow_dispatch:
+
+concurrency:
+  group: remote-p4-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build:
@@ -12,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        mode: [upstream, remote-lan]
+        mode: [upstream, remote-lan, wireguard]
     container:
       image: espressif/idf:v6.0.1
     steps:
@@ -29,6 +33,14 @@ jobs:
           CONFIG_ADSBIN_REMOTE_WIFI_SSID="test-wifi"
           CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD="test-password"
           CONFIG_ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN=y
+          EOF
+          fi
+          if [ "${{ matrix.mode }}" = "wireguard" ]; then
+            cat >> sdkconfig.defaults <<'EOF'
+          CONFIG_ADSBIN_REMOTE_ENABLE=y
+          CONFIG_ADSBIN_REMOTE_WIREGUARD=y
+          CONFIG_ADSBIN_REMOTE_WIFI_SSID="ci-test-ssid"
+          CONFIG_ADSBIN_REMOTE_HOST="192.168.107.20"
           EOF
           fi
           idf.py set-target esp32p4

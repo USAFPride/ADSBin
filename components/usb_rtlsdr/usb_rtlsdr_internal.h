@@ -209,10 +209,10 @@ extern "C" {
 #define R820T_REG_LNA_TOP         0x0Du  /**< LNA AGC loop top voltage.          */
 #define R820T_REG_MIX_TOP         0x0Eu  /**< Mixer AGC loop top voltage.        */
 #define R820T_REG_PLL_VCO         0x10u  /**< Reference divider + VCO settings.  */
-#define R820T_REG_PLL_FRAC_LO     0x11u  /**< Sigma-delta fractional [7:0].      */
-#define R820T_REG_PLL_FRAC_HI     0x12u  /**< Sigma-delta fractional [15:8].     */
-#define R820T_REG_PLL_NINT        0x13u  /**< Integer divider Nint + frac msb.   */
-#define R820T_REG_PLL_VCO_CTRL    0x14u  /**< VCO band / divider control.        */
+#define R820T_REG_PLL_FRAC_LO     0x15u  /**< Sigma-delta fractional [7:0].      */
+#define R820T_REG_PLL_FRAC_HI     0x16u  /**< Sigma-delta fractional [15:8].     */
+#define R820T_REG_PLL_NINT        0x14u  /**< Integer divider Ni and Si.        */
+#define R820T_REG_PLL_SDM_CTRL    0x12u  /**< VCO current and SDM power control.*/
 #define R820T_REG_TF_FILTER       0x1Au  /**< Tracking-filter / PLL auto.        */
 #define R820T_REG_FILTER_GATE     0x1Bu  /**< Filter gate + tracking band.       */
 

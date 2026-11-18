@@ -142,6 +142,11 @@ typedef struct {
     uint32_t usb_stall_count; /**< Bulk endpoint stalls.                         */
     uint32_t reset_count;     /**< Re-enumeration/reset events.                  */
     uint32_t measured_sps;    /**< Most recent measured effective sample rate.   */
+    uint8_t  iq_min_i;        /**< Min I of latest periodic sampled USB transfer. */
+    uint8_t  iq_max_i;        /**< Max I of latest periodic sampled USB transfer. */
+    uint8_t  iq_min_q;        /**< Min Q of latest periodic sampled USB transfer. */
+    uint8_t  iq_max_q;        /**< Max Q of latest periodic sampled USB transfer. */
+    uint32_t iq_sample_pairs; /**< Pairs inspected in latest sampled transfer.    */
 } usb_rtlsdr_stats_t;
 
 /* ───────────────────────────────────────────────────────────────────────────

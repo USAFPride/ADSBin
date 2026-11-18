@@ -99,6 +99,42 @@ static const char *TAG = "adsbin";
 #define ADSBIN_UAT_DECODE_STACK    6144   /**< UAT decode glue: uat_decode_adsb(). */
 #define ADSBIN_UAT_UPLINK_STACK    4096   /**< weather glue: drain ring -> 0x07.   */
 
+/* Bench RF diagnostics: run on Core 1, never in the USB/DSP hot path.
+ * Actual input sample rate, ring drops, and I/Q range distinguish a USB
+ * throughput problem from a flatline tuner or too-strict demodulator. */
+static void rf_diag_task(void *arg)
+{
+    (void)arg;
+    usb_rtlsdr_stats_t prev_usb = {0};
+    demod1090_stats_t prev_demod = {0};
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        usb_rtlsdr_stats_t u = {0};
+        demod1090_stats_t d = {0};
+        if (usb_rtlsdr_get_stats(&u) != ESP_OK) continue;
+        demod1090_get_stats(&d);
+        ESP_LOGW("rf_diag",
+                 "SPS=%lu USB_blocks/10s=%llu USB_bytes/10s=%llu "
+                 "USB_drops/10s=%llu DSP_blocks/10s=%llu DSP_drops/10s=%llu "
+                 "DSP_samples/10s=%llu PRE/10s=%llu FRM/10s=%llu "
+                 "IQ_I=[%u,%u] IQ_Q=[%u,%u] IQ_pairs=%lu",
+                 (unsigned long)u.measured_sps,
+                 (unsigned long long)(u.total_blocks - prev_usb.total_blocks),
+                 (unsigned long long)(u.total_bytes - prev_usb.total_bytes),
+                 (unsigned long long)(u.overflow_drops - prev_usb.overflow_drops),
+                 (unsigned long long)(d.iq_blocks_consumed - prev_demod.iq_blocks_consumed),
+                 (unsigned long long)(d.iq_blocks_dropped - prev_demod.iq_blocks_dropped),
+                 (unsigned long long)(d.samples_processed - prev_demod.samples_processed),
+                 (unsigned long long)(d.preambles_detected - prev_demod.preambles_detected),
+                 (unsigned long long)(d.frames_emitted - prev_demod.frames_emitted),
+                 (unsigned)u.iq_min_i, (unsigned)u.iq_max_i,
+                 (unsigned)u.iq_min_q, (unsigned)u.iq_max_q,
+                 (unsigned long)u.iq_sample_pairs);
+        prev_usb = u;
+        prev_demod = d;
+    }
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
  *  Pipeline cadence / sizing knobs.
  * ─────────────────────────────────────────────────────────────────────────── */
@@ -1429,6 +1465,13 @@ esp_err_t adsbin_app_start(void)
      * transports (CDC always, UDP if WiFi came up) already exist by this point, so
      * the weather sink can bind to them. */
     build_978_pipeline();
+
+    BaseType_t diag_ok = xTaskCreatePinnedToCore(rf_diag_task, "adsbin_rf_diag",
+                                                 4096, NULL, ADSBIN_PRIO_STATUS,
+                                                 NULL, ADSBIN_CORE_DECODE);
+    if (diag_ok != pdPASS) {
+        ESP_LOGW(TAG, "RF diagnostic task unavailable");
+    }
 
     ESP_LOGI(TAG, "pipeline up: usb->demod(core0) -> decode/traffic/sinks(core1)%s",
              s_978_built ? " + 978 UAT/weather" : "");
