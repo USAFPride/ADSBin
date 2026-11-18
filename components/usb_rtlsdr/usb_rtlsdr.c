@@ -1152,7 +1152,6 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         }
     }
     d->perf_last_cb_us = now;
-    int64_t copy_start_us = now;
     bool early_submitted = false;
 
     /* EXPERIMENT: when a full URB arrives, arm the OTHER DMA buffer before
@@ -1164,6 +1163,7 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         usb_transfer_t *alternate = (xfer == d->urb[0]) ? d->urb[1] : d->urb[0];
         if (alternate != NULL) {
             int64_t early_start_us = adsbin_now_us();
+            d->perf_pre_submit_sum_us += (uint64_t)(early_start_us - now);
             esp_err_t early_err = usb_host_transfer_submit(alternate);
             d->perf_submit_sum_us += (uint64_t)(adsbin_now_us() - early_start_us);
             if (early_err == ESP_OK) {
@@ -1176,6 +1176,9 @@ static void bulk_in_cb(usb_transfer_t *xfer)
             }
         }
     }
+
+    /* Exclude the early submit attempt from the ring/diagnostic timing. */
+    int64_t copy_start_us = adsbin_now_us();
 
     switch (xfer->status) {
     case USB_TRANSFER_STATUS_COMPLETED: {
@@ -1348,7 +1351,6 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     if (early_submitted) {
         /* Do not double-submit: the alternate URB now owns the live pipe.
          * This just-finished URB remains idle until the next completion. */
-        d->perf_pre_submit_sum_us += (uint64_t)(submit_start_us - now);
         d->perf_count++;
         return;
     }
