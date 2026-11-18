@@ -92,7 +92,7 @@ static demod1090_ctx_t s_ctx;
  * cycle CSR is a couple of instructions, so the probe is near-free even when on;
  * compiled out entirely when off. Never enable in a shipping build. */
 #ifndef DEMOD1090_PROFILE
-#define DEMOD1090_PROFILE 0
+#define DEMOD1090_PROFILE 1  /* Bench-only: profile magnitude vs preamble scan. */
 #endif
 
 #if DEMOD1090_PROFILE
@@ -626,11 +626,19 @@ static void demod_task(void *arg)
         static uint64_t s_mag_cyc = 0, s_scan_cyc = 0, s_blocks = 0;
         s_mag_cyc  += (uint32_t)(prof_c1 - prof_c0);
         s_scan_cyc += (uint32_t)(prof_c3 - prof_c2);
-        if (++s_blocks >= 73) {   /* ~1 s of blocks at 2.4 Msps / 32 KiB URBs */
-            ESP_LOGI(TAG, "PROFILE/blk: magnitude=%llu cyc  preamble-scan=%llu cyc  (n=%llu)",
-                     (unsigned long long)(s_mag_cyc / s_blocks),
-                     (unsigned long long)(s_scan_cyc / s_blocks),
-                     (unsigned long long)s_blocks);
+        if (++s_blocks >= 64) {   /* Fixed-size window: compare cycles per IQ block. */
+            const uint64_t mag_avg = s_mag_cyc / s_blocks;
+            const uint64_t scan_avg = s_scan_cyc / s_blocks;
+            const uint64_t total_avg = mag_avg + scan_avg;
+            /* ESP32-P4 CPU runs at 400 MHz: 400000 cycles = 1 ms.
+             * If interrupts or higher-priority USB work preempt the task,
+             * elapsed cycles include that delay; this is a wall-clock budget. */
+            ESP_LOGW(TAG, "DSP_PROFILE: blocks=%llu mag_cyc=%llu scan_cyc=%llu total_cyc=%llu total_us=%llu",
+                     (unsigned long long)s_blocks,
+                     (unsigned long long)mag_avg,
+                     (unsigned long long)scan_avg,
+                     (unsigned long long)total_avg,
+                     (unsigned long long)(total_avg / 400u));
             s_mag_cyc = s_scan_cyc = s_blocks = 0;
         }
 #endif
