@@ -18,9 +18,16 @@ Editable and persisted in NVS namespace `web_cfg`:
 - `wg_public` (WireGuard peer PUBLIC key)
 - `wg_endpoint`, `wg_ip`, `wg_port`
 
-**Not accepted:** Wi-Fi password, WireGuard PRIVATE key, token, or other
-credentials. These are deliberately excluded from both GET and POST.
-The firmware rejects any unknown JSON field.
+**Optional isolated bench password test:** Enable
+`ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP=y` in `idf.py menuconfig`.
+This allows a disposable 8–63-character test Wi-Fi password in POST
+`/api/config`. The secret is stored under `wifi_pass` in ordinary NVS,
+never returned by GET, and loaded only when remote STA mode starts.
+The UI reports whether a password is present without revealing it.
+**HTTP, the AP, and NVS are unencrypted. Do not use production Wi-Fi
+credentials.** Disable this feature and erase any stored test password
+before field deployment. WireGuard PRIVATE keys and other credentials
+remain blocked. Unknown JSON fields are rejected.
 
 Application behavior:
 - Beast destination/port override is loaded when a new TCP connection is made
@@ -40,3 +47,11 @@ again. Inspect `http://192.168.4.1/api/config` if debugging.
 Do not merge until build succeeds and 1090 MHz RF throughput/aircraft
 decoding remain stable during HTTP operations. When secure provisioning is
 available, disable this open HTTP configuration endpoint.
+
+## Confirm Save works
+
+On the bench page, enter a harmless non-secret Beast host/port and press Save.
+The status text should state `Saved in NVS (server confirmed)`.
+Reload the page and confirm the same fields reappear, then reboot the board
+and check once more. Directly visit `http://192.168.4.1/api/config` to
+inspect saved non-secret fields. The Wi-Fi password is never included.
