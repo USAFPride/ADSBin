@@ -671,7 +671,7 @@ static esp_err_t r820t_set_pll(usb_rtlsdr_dev_t *d, uint32_t lo_hz)
     }
     uint8_t  ni  = (uint8_t)((nint - 13) / 4);
     uint8_t  si  = (uint8_t)((nint - 13) - (ni * 4));
-    uint8_t  reg13 = (uint8_t)((ni & 0x3F) + (si << 6));
+    uint8_t  reg14 = (uint8_t)((ni & 0x3F) | (si << 6));
 
     /* 16-bit sigma-delta fraction = round(vco_frac / pll_step * 2^16). */
     uint16_t sdm = (uint16_t)(((uint64_t)vco_frac << 16) / pll_step);
@@ -685,14 +685,40 @@ static esp_err_t r820t_set_pll(usb_rtlsdr_dev_t *d, uint32_t lo_hz)
     uint8_t reg10 = (uint8_t)((d->r82_shadow[R820T_REG_PLL_VCO] & 0x1F) | (div_num << 5));
     err |= r820t_write(d, R820T_REG_PLL_VCO, reg10);
 
-    /* reg 0x11/0x12: 16-bit sigma-delta fractional divider. */
-    err |= r820t_write(d, R820T_REG_PLL_FRAC_LO, sdm_lo);
+    /* PLL integer divider lives in 0x14, NOT 0x13. Fractional bytes are
+     * at 0x15 (low) and 0x16 (high), NOT 0x11/0x12.
+     * Preserve the VCO current and other control bits in register 0x12. */
+    err |= r820t_write(d, R820T_REG_PLL_NINT, reg14);
+    uint8_t reg12 = (uint8_t)((d->r82_shadow[R820T_REG_PLL_SDM_CTRL] & ~0x18u)
+                             | ((sdm == 0) ? 0x08u : 0x00u));
+    err |= r820t_write(d, R820T_REG_PLL_SDM_CTRL, reg12);
     err |= r820t_write(d, R820T_REG_PLL_FRAC_HI, sdm_hi);
+    err |= r820t_write(d, R820T_REG_PLL_FRAC_LO, sdm_lo);
 
-    /* reg 0x13: integer divider (Nint encoding). */
-    err |= r820t_write(d, R820T_REG_PLL_NINT, reg13);
+    if (err != ESP_OK) return ESP_FAIL;
 
-    return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
+    /* Read back 3 R820T status bytes (bit-reversed by the tuner). The PLL
+     * lock indicator is bit 6 of status byte 2. Warn but keep bench capture
+     * running if no lock; a silent/flat I/Q stream is diagnostic evidence. */
+    vTaskDelay(pdMS_TO_TICKS(10));
+    uint8_t pll_status[3] = {0};
+    esp_err_t rd = ctrl_xfer_retry(d, RTL_CTRL_IN, RTL_VENDOR_REQUEST,
+                                  (uint16_t)R820T_I2C_ADDR, RTL_BLK_I2C,
+                                  pll_status, sizeof(pll_status));
+    if (rd == ESP_OK) {
+        uint8_t b = pll_status[2];
+        b = (uint8_t)(((b & 0xf0u) >> 4) | ((b & 0x0fu) << 4));
+        b = (uint8_t)(((b & 0xccu) >> 2) | ((b & 0x33u) << 2));
+        b = (uint8_t)(((b & 0xaau) >> 1) | ((b & 0x55u) << 1));
+        ESP_LOGW(TAG, "R820T PLL %s at LO=%lu Hz (status2=0x%02x)",
+                 (b & 0x40u) ? "LOCKED" : "NOT LOCKED",
+                 (unsigned long)lo_hz, (unsigned)b);
+    } else {
+        ESP_LOGW(TAG, "R820T PLL lock status unavailable (%s)",
+                 esp_err_to_name(rd));
+    }
+
+    return ESP_OK;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -723,9 +749,15 @@ static esp_err_t r820t_apply_gain(usb_rtlsdr_dev_t *d, usb_rtlsdr_gain_mode_t mo
         /* Hand all three stages to the chip's AGC loop: set the AUTO bit on the
          * LNA, mixer and VGA registers. The low-nibble gain step is ignored by
          * the chip while AUTO is set, but we leave a sane mid value. */
-        err |= r820t_write(d, R820T_REG_LNA_GAIN,   (uint8_t)(R820T_AGC_AUTO_BIT | 0x08));
-        err |= r820t_write(d, R820T_REG_MIXER_GAIN, (uint8_t)(R820T_AGC_AUTO_BIT | 0x08));
-        err |= r820t_write(d, R820T_REG_VGA_GAIN,   (uint8_t)(R820T_AGC_AUTO_BIT | 0x0B));
+        err |= r820t_write(d, R820T_REG_LNA_GAIN,
+                           (uint8_t)((d->r82_shadow[R820T_REG_LNA_GAIN] & 0xe0u) |
+                                     R820T_AGC_AUTO_BIT | 0x08u));
+        err |= r820t_write(d, R820T_REG_MIXER_GAIN,
+                           (uint8_t)((d->r82_shadow[R820T_REG_MIXER_GAIN] & 0xe0u) |
+                                     R820T_AGC_AUTO_BIT | 0x08u));
+        err |= r820t_write(d, R820T_REG_VGA_GAIN,
+                           (uint8_t)((d->r82_shadow[R820T_REG_VGA_GAIN] & 0xe0u) |
+                                     R820T_AGC_AUTO_BIT | 0x0bu));
         return (err == ESP_OK) ? ESP_OK : ESP_FAIL;
     }
 
@@ -744,12 +776,15 @@ static esp_err_t r820t_apply_gain(usb_rtlsdr_dev_t *d, usb_rtlsdr_gain_mode_t mo
     if (lna_step > 15) lna_step = 15;
     if (mix_step > 15) mix_step = 15;
 
-    /* reg 0x05: manual (AGC bit clear) + LNA gain step in the low nibble. */
-    uint8_t reg05 = (uint8_t)(lna_step & R820T_GAIN_STEP_MASK);
-    /* reg 0x07: manual + mixer gain step in the low nibble. */
-    uint8_t reg07 = (uint8_t)(mix_step & R820T_GAIN_STEP_MASK);
-    /* reg 0x0C: VGA manual, fixed mid-high IF gain step (0x0B ~ 16.3 dB). */
-    uint8_t reg0c = (uint8_t)(0x0B & R820T_GAIN_STEP_MASK);
+    /* Preserve unrelated power, RF path, and loop-through control bits.
+     * The previous full-byte writes (e.g. 0x0f) cleared these bits and
+     * could disable the receive chain even with a correct PLL frequency. */
+    uint8_t reg05 = (uint8_t)((d->r82_shadow[R820T_REG_LNA_GAIN] & 0xe0u) |
+                               (lna_step & R820T_GAIN_STEP_MASK));
+    uint8_t reg07 = (uint8_t)((d->r82_shadow[R820T_REG_MIXER_GAIN] & 0xe0u) |
+                               (mix_step & R820T_GAIN_STEP_MASK));
+    uint8_t reg0c = (uint8_t)((d->r82_shadow[R820T_REG_VGA_GAIN] & 0xe0u) |
+                               (0x0Bu & R820T_GAIN_STEP_MASK));
 
     err |= r820t_write(d, R820T_REG_LNA_GAIN,   reg05);
     err |= r820t_write(d, R820T_REG_MIXER_GAIN, reg07);
@@ -771,40 +806,16 @@ static esp_err_t r820t_init(usb_rtlsdr_dev_t *d)
 {
     esp_err_t err = ESP_OK;
 
-    /* Seed the writable-register shadow with the datasheet power-up defaults for
-     * the high band. These set: LNA/mixer/VGA blocks powered, IF filter on, a
-     * neutral tracking-filter, and PLL block enabled. Index 0..4 are read-only
-     * status registers and are never written. */
+    /* Seed the tuner with the established R82xx register defaults.
+     * Index 0..4 are read-only status registers and are never written. */
+    /* Proven R82xx power-on register defaults, addresses 0x05..0x1f.
+     * Do not replace with invented power/filter bitfields: those can gate RF. */
     static const uint8_t init_regs[R820T_NUM_REGS] = {
-        /* 0x00..0x04: read-only status (placeholders, never written). */
-        0x00, 0x00, 0x00, 0x00, 0x00,
-        /* 0x05 LNA: manual, mid gain (overwritten by apply_gain).            */ 0x90,
-        /* 0x06 power-detect / filter power on.                               */ 0x80,
-        /* 0x07 mixer: manual, mid gain (overwritten by apply_gain).         */ 0x60,
-        /* 0x08 mixer buffer power on.                                        */ 0x80,
-        /* 0x09 IF filter power / current.                                    */ 0x40,
-        /* 0x0A filter auto-cal trigger + VGA manual.                         */ 0xA0,
-        /* 0x0B channel filter bandwidth (widest for ADS-B burst).           */ 0x6F,
-        /* 0x0C VGA: manual, fixed IF gain.                                  */ 0x40,
-        /* 0x0D LNA AGC top.                                                  */ 0x63,
-        /* 0x0E mixer AGC top.                                                */ 0x75,
-        /* 0x0F reserved/clk.                                                 */ 0x68,
-        /* 0x10 PLL VCO + divider (overwritten by set_pll).                  */ 0x6C,
-        /* 0x11 PLL frac lo.                                                  */ 0x83,
-        /* 0x12 PLL frac hi.                                                  */ 0x80,
-        /* 0x13 PLL Nint.                                                     */ 0x00,
-        /* 0x14 PLL VCO ctrl.                                                 */ 0x0F,
-        /* 0x15 reserved.                                                     */ 0x00,
-        /* 0x16 reserved.                                                     */ 0xC0,
-        /* 0x17 reserved.                                                     */ 0x30,
-        /* 0x18 reserved.                                                     */ 0x48,
-        /* 0x19 reserved.                                                     */ 0xCC,
-        /* 0x1A tracking filter / PLL auto (high band).                       */ 0x60,
-        /* 0x1B filter gate + tracking band (high band).                      */ 0x00,
-        /* 0x1C reserved.                                                     */ 0x54,
-        /* 0x1D reserved.                                                     */ 0xAE,
-        /* 0x1E reserved.                                                     */ 0x4A,
-        /* 0x1F reserved.                                                     */ 0xC0,
+        0, 0, 0, 0, 0,  /* 0x00..0x04: read-only */
+        0x83, 0x32, 0x75, 0xc0, 0x40, 0xd6, 0x6c, 0xf5,
+        0x63, 0x75, 0x68, 0x6c, 0x83, 0x80, 0x00, 0x0f,
+        0x00, 0xc0, 0x30, 0x48, 0xcc, 0x60, 0x00, 0x54,
+        0xae, 0x4a, 0xc0
     };
     memcpy(d->r82_shadow, init_regs, sizeof(init_regs));
 
