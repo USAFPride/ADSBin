@@ -48,7 +48,9 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
         snprintf(temp_json, sizeof(temp_json), "null");
     }
 
-    char out[700];
+    wifi_station_snapshot_t station = {0};
+    wifi_station_get_snapshot(&station);
+    char out[900];
     int n = snprintf(out, sizeof(out),
        "{\"uptime_s\":%llu,\"aircraft\":%u,\"sample_sps\":%lu,"
        "\"usb_present\":%s,\"streaming\":%s,"
@@ -56,7 +58,9 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        "\"usb_stalls\":%lu,\"usb_resets\":%lu,"
        "\"usb_bytes\":%llu,\"usb_urbs\":%llu,"
        "\"preambles\":%llu,\"frames\":%llu,"
-       "\"temperature_c\":%s,\"access_point\":%s,\"station_connected\":%s}",
+       "\"temperature_c\":%s,\"access_point\":%s,\"station_connected\":%s,"
+       "\"station_connecting\":%s,\"station_ip\":\"%s\",\"station_rssi\":%d,"
+       "\"wifi_attempts\":%lu,\"wifi_disconnects\":%lu,\"wifi_last_reason\":%lu}",
        (unsigned long long)(esp_timer_get_time() / 1000000),
        (unsigned)(s_aircraft_count ? s_aircraft_count() : 0u),
        (unsigned long)usb.measured_sps,
@@ -72,7 +76,12 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        (unsigned long long)demod.frames_emitted,
        temp_json,
        wifi_link_is_up() ? "true" : "false",
-       wifi_station_is_connected() ? "true" : "false");
+       station.connected ? "true" : "false",
+       station.connecting ? "true" : "false",
+       station.ip, station.rssi,
+       (unsigned long)station.attempts,
+       (unsigned long)station.disconnects,
+       (unsigned long)station.last_reason);
     if (n < 0 || (size_t)n >= sizeof(out)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Snapshot overflow");
     }
@@ -88,7 +97,7 @@ esp_err_t web_ui_start(size_t (*aircraft_count)(void))
     s_aircraft_count = aircraft_count;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 6144;
-    config.max_uri_handlers = 4;
+    config.max_uri_handlers = 8;
     config.lru_purge_enable = true;
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
