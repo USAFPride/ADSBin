@@ -53,7 +53,7 @@ static esp_err_t metadata(httpd_req_t *r){
                         "wg_endpoint","wg_ip","wg_port","wifi_pass","wg_private"};
     cJSON *root=cJSON_CreateObject();
     cJSON_AddBoolToObject(root,"stored",true);
-    cJSON_AddBoolToObject(root,"encrypted",esp_flash_encryption_enabled());
+    cJSON_AddBoolToObject(root,"flash_encryption_enabled",esp_flash_encryption_enabled());
     for(unsigned i=0;i<sizeof(keys)/sizeof(keys[0]);i++){
         size_t size=0;
         if(nvs_get_str(n,keys[i],NULL,&size)==ESP_OK && size>0){
@@ -154,6 +154,8 @@ esp_err_t web_ui_secure_start(void){
     cfg.servercert_len=(size_t)(servercert_pem_end-servercert_pem_start);
     cfg.prvtkey_pem=(const unsigned char*)serverkey_pem_start;
     cfg.prvtkey_len=(size_t)(serverkey_pem_end-serverkey_pem_start);
+    /* Two HTTPD instances must not share their internal control port. */
+    cfg.httpd.ctrl_port=32769;
     cfg.httpd.max_uri_handlers=5;
     cfg.httpd.stack_size=8192;
     esp_err_t err=httpd_ssl_start(&server,&cfg);
