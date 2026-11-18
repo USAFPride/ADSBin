@@ -30,6 +30,13 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 <body>
 <header><div><div class="logo">ADSBin <span style="color:#59a9ff">/</span> Receiver</div><div class="sub">ESP32-P4 · Remote ADS-B receiver</div></div><span id="state" class="state">Connecting…</span></header>
 <main>
+<div id="adminLogin" class="panel" hidden>
+<h2>HTTPS administrator session</h2>
+<p class="small">Enter the one-boot token printed on the ESP32-P4 serial console. It is held in memory only and is not saved by the browser.</p>
+<div class="row"><div><label for="adminToken">One-boot administrator token</label><input id="adminToken" type="password" autocomplete="off" placeholder="32-character token"></div></div>
+<p id="loginNotice" class="small">Session not authenticated</p>
+<button id="adminConnect" class="primary" type="button">Load saved settings</button>
+</div>
 <nav aria-label="Sections">
 <button class="active" data-tab="dashboard">Dashboard</button><button data-tab="network">Network</button><button data-tab="wireguard">WireGuard</button><button data-tab="receiver">Receiver</button><button data-tab="system">System</button>
 </nav>
@@ -47,25 +54,25 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 </section>
 <section id="network" hidden>
 <div class="panel"><h2>Wi-Fi and Beast TCP configuration</h2>
-<div class="notice">Configuration fields are displayed for planning and bench validation. This revision does not accept or persist credentials. Apply controls will be enabled only after authenticated, protected provisioning is implemented.</div>
+<div class="notice">Non-secret fields can be saved over HTTPS after administrator authentication. Secrets remain disabled until encrypted NVS is implemented. Changes are staged for future runtime integration; they do not currently reconfigure Wi-Fi or Beast.</div>
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
-<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Not stored by this revision"></div>
+<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Unavailable: encrypted NVS pending" disabled></div>
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
 </div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
-<button class="primary" disabled>Save &amp; apply — security integration pending</button>
+<p id="networkSaveNotice" class="small"></p><button id="saveNetwork" class="primary" type="button" disabled>Save non-secret settings</button>
 </div></section>
 <section id="wireguard" hidden>
 <div class="panel"><h2>WireGuard client</h2>
-<div class="notice">Never paste a production private key into an unprotected HTTP page. WireGuard provisioning is intentionally disabled until authenticated HTTPS and encrypted storage are available.</div>
+<div class="notice">Private keys cannot be entered or stored in this revision. Public peer settings can be saved over authenticated HTTPS. WireGuard runtime configuration still uses the firmware settings.</div>
 <div class="row">
-<div><label for="wgPriv">Client private key</label><input id="wgPriv" type="password" autocomplete="off" placeholder="Not configured"></div>
+<div><label for="wgPriv">Client private key</label><input id="wgPriv" type="password" autocomplete="off" placeholder="Unavailable: encrypted NVS pending" disabled></div>
 <div><label for="wgPub">Server public key</label><input id="wgPub" type="text" autocomplete="off"></div>
 <div><label for="wgEndpoint">VPN endpoint</label><input id="wgEndpoint" placeholder="hostname or IPv4"></div>
 <div><label for="wgPort">UDP port</label><input id="wgPort" type="number" value="51820" min="1" max="65535"></div>
 <div><label for="wgIP">Tunnel IPv4</label><input id="wgIP" placeholder="10.50.0.20"></div>
-</div><button class="primary" disabled>Save &amp; apply — security integration pending</button>
+</div><p id="wireguardSaveNotice" class="small"></p><button id="saveWireGuard" class="primary" type="button" disabled>Save public peer settings</button>
 </div></section>
 <section id="receiver" hidden>
 <div class="panel"><h2>SDR configuration</h2><div class="row">
@@ -87,6 +94,52 @@ document.querySelectorAll('nav button').forEach(button=>button.addEventListener(
   document.querySelectorAll('main section').forEach(s=>s.hidden=s.id!==button.dataset.tab);
 }));
 function fmt(v){return v===null||v===undefined?'—':String(v)}
+let adminToken='';
+const isTLS=location.protocol==='https:';
+$('adminLogin').hidden=!isTLS;
+function authorize(){return {'X-ADSBin-Token':adminToken};}
+async function adminLoad(){
+ adminToken=$('adminToken').value.trim();
+ if(!/^[0-9a-fA-F]{32}$/.test(adminToken)){
+  $('loginNotice').textContent='Invalid token format';return;
+ }
+ try{
+  const resp=await fetch('/api/config',{headers:authorize(),cache:'no-store'});
+  if(!resp.ok)throw Error('HTTP '+resp.status);
+  const config=await resp.json();
+  const maps={wifi_ssid:'ssid',beast_host:'beastHost',beast_port:'beastPort',wg_public:'wgPub',wg_endpoint:'wgEndpoint',wg_ip:'wgIP',wg_port:'wgPort'};
+  Object.keys(maps).forEach(k=>{if(config[k]!==undefined)$(maps[k]).value=config[k];});
+  $('saveNetwork').disabled=false;
+  $('saveWireGuard').disabled=false;
+  $('loginNotice').textContent='Authenticated · secrets remain unavailable in this firmware';
+  $('adminToken').value='';
+ }catch(e){
+  adminToken='';
+  $('saveNetwork').disabled=true;$('saveWireGuard').disabled=true;
+  $('loginNotice').textContent='Authorization failed: '+e.message;
+ }
+}
+$('adminConnect').addEventListener('click',adminLoad);
+async function saveSettings(payload,noticeId){
+ try{
+  const resp=await fetch('/api/config',{method:'POST',
+    headers:{...authorize(),'Content-Type':'application/json'},body:JSON.stringify(payload)});
+  if(!resp.ok){const t=await resp.text();throw Error('HTTP '+resp.status+' '+t.slice(0,160));}
+  $(noticeId).textContent='Saved in NVS. These settings are not active yet; runtime integration is pending.';
+ }catch(e){$(noticeId).textContent='Save failed: '+e.message;}
+}
+$('saveNetwork').addEventListener('click',()=>saveSettings({
+ wifi_ssid:$('ssid').value.trim(),
+ beast_host:$('beastHost').value.trim(),
+ beast_port:$('beastPort').value.trim()
+},'networkSaveNotice'));
+$('saveWireGuard').addEventListener('click',()=>saveSettings({
+ wg_public:$('wgPub').value.trim(),
+ wg_endpoint:$('wgEndpoint').value.trim(),
+ wg_ip:$('wgIP').value.trim(),
+ wg_port:$('wgPort').value.trim()
+},'wireguardSaveNotice'));
+
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});
