@@ -77,6 +77,7 @@
 #include "sink_gdl90.h"     // GDL90 sink
 #include "sink_uat_weather.h" // GDL90 0x07 FIS-B weather relay sink
 #include "wifi_link.h"
+#include "wifi_station.h"
 #include "web_ui.h"
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
 #include "wifi_station.h"
@@ -1179,6 +1180,13 @@ esp_err_t adsbin_app_start(void)
         if (werr != ESP_OK) {
             ESP_LOGW(TAG, "early wifi_link_start_ap failed (%s) - WiFi disabled, "
                           "wired path unaffected", esp_err_to_name(werr));
+        }
+        else {
+            /* Bench AP+STA: start upstream Wi-Fi test before SDR streaming.
+             * Never stop the ADSBin setup AP; leave it as a recovery path. */
+            esp_err_t sta_err = wifi_station_start_apsta();
+            if (sta_err != ESP_OK)
+                ESP_LOGW(TAG, "AP+STA setup unavailable: %s", esp_err_to_name(sta_err));
         }
     }
 
