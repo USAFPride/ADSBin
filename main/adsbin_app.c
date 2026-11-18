@@ -107,12 +107,15 @@ static void rf_diag_task(void *arg)
     (void)arg;
     usb_rtlsdr_stats_t prev_usb = {0};
     demod1090_stats_t prev_demod = {0};
+    modes_decode_stats_t prev_modes = {0};
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         usb_rtlsdr_stats_t u = {0};
         demod1090_stats_t d = {0};
+        modes_decode_stats_t m = {0};
         if (usb_rtlsdr_get_stats(&u) != ESP_OK) continue;
         demod1090_get_stats(&d);
+        modes_decode_get_stats(&m);
         ESP_LOGW("rf_diag",
                  "SPS=%lu USB_blocks/10s=%llu USB_bytes/10s=%llu "
                  "USB_drops/10s=%llu DSP_blocks/10s=%llu DSP_drops/10s=%llu "
@@ -130,8 +133,27 @@ static void rf_diag_task(void *arg)
                  (unsigned)u.iq_min_i, (unsigned)u.iq_max_i,
                  (unsigned)u.iq_min_q, (unsigned)u.iq_max_q,
                  (unsigned long)u.iq_sample_pairs);
+
+        /* Automatic CRC validation, independent of the console input reader.
+         * Only 10-second snapshots of counters already maintained by modes_decode.
+         * Keep the output on a separate short line from the existing RF report. */
+        const uint32_t pos_now = m.positions_global + m.positions_local;
+        const uint32_t pos_prev = prev_modes.positions_global + prev_modes.positions_local;
+        ESP_LOGW("decode_diag",
+                 "IN/10s=%u COK/10s=%u CFAIL/10s=%u DFDROP/10s=%u "
+                 "POS/10s=%u COK_total=%u CFAIL_total=%u DFDROP_total=%u POS_total=%u",
+                 (unsigned)(m.frames_in - prev_modes.frames_in),
+                 (unsigned)(m.crc_ok - prev_modes.crc_ok),
+                 (unsigned)(m.crc_fail - prev_modes.crc_fail),
+                 (unsigned)(m.df_dropped - prev_modes.df_dropped),
+                 (unsigned)(pos_now - pos_prev),
+                 (unsigned)m.crc_ok,
+                 (unsigned)m.crc_fail,
+                 (unsigned)m.df_dropped,
+                 (unsigned)pos_now);
         prev_usb = u;
         prev_demod = d;
+        prev_modes = m;
     }
 }
 
