@@ -12,12 +12,11 @@ In an ESP-IDF PowerShell terminal with OpenSSL available:
 
 ```powershell
 cd C:\esp\projects\ADSBin
-New-Item -ItemType Directory -Force components\web_ui\certs | Out-Null
 openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -sha256 -days 365 `
-  -keyout components\web_ui\certs\serverkey.pem `
-  -out components\web_ui\certs\servercert.pem `
+  -keyout components\web_ui\serverkey.pem `
+  -out components\web_ui\servercert.pem `
   -subj "/CN=192.168.4.1" -addext "subjectAltName=IP:192.168.4.1"
-openssl x509 -in components\web_ui\certs\servercert.pem -noout -fingerprint -sha256
+openssl x509 -in components\web_ui\servercert.pem -noout -fingerprint -sha256
 ```
 
 Validate the SHA-256 certificate fingerprint in the browser using the local
