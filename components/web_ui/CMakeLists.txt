@@ -2,7 +2,7 @@ set(web_extra_sources "")
 set(web_extra_embeds "")
 if(CONFIG_ADSBIN_WEB_HTTPS_CONFIG)
     list(APPEND web_extra_sources "web_secure.c")
-    list(APPEND web_extra_embeds "certs/servercert.pem" "certs/serverkey.pem")
+    list(APPEND web_extra_embeds "servercert.pem" "serverkey.pem")
 endif()
 idf_component_register(
     SRCS "web_ui.c" ${web_extra_sources}
