@@ -340,6 +340,14 @@ typedef struct {
     uint32_t perf_copy_max_us;
     uint32_t perf_count;
 
+    /* Early alternate-URB pipeline experiment. Single in-flight URB, alternate
+     * DMA buffer is submitted before the completed one is consumed. */
+    uint32_t pipe_early_ok;
+    uint32_t pipe_early_invalid_state;
+    uint32_t pipe_early_other_fail;
+    uint32_t pipe_fallback_ok;
+    uint32_t pipe_fallback_fail;
+
     /* ---- the owned IQ ring (no-split; producer = Core-0 completion) ---- */
     RingbufHandle_t  iq_ring;            /**< Allocated at init, one per slot.   */
     uint32_t         block_seq;          /**< Monotonic iq_block_t.seq counter.  */
