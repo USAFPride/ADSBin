@@ -117,7 +117,7 @@ static esp_err_t wifi_test(httpd_req_t *req)
 {
     esp_err_t err = wifi_station_request_test();
     if (err != ESP_OK)
-        return httpd_resp_send_err(req, HTTPD_503_SERVICE_UNAVAILABLE,
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
                                    "AP+STA not ready or test already running");
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"started\":true}");
