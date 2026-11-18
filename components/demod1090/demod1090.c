@@ -92,7 +92,7 @@ static demod1090_ctx_t s_ctx;
  * cycle CSR is a couple of instructions, so the probe is near-free even when on;
  * compiled out entirely when off. Never enable in a shipping build. */
 #ifndef DEMOD1090_PROFILE
-#define DEMOD1090_PROFILE 1  /* Bench-only: profile magnitude vs preamble scan. */
+#define DEMOD1090_PROFILE 0  /* Disabled for sustained receiver testing. */
 #endif
 
 #if DEMOD1090_PROFILE
