@@ -20,3 +20,12 @@ PERF_OVERHAUL_PLAN.md
 
 # Third-party WireGuard port is installed locally until reviewed/pinned.
 /components/esp_wireguard/
+
+# Local-only provisioning records, Wi-Fi credentials and VPN secrets.
+# Device credentials must live in NVS, never in committed configuration.
+.env
+.env.*
+*.secrets.json
+*.secrets.yaml
+*.secrets.yml
+provisioning.local.*
