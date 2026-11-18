@@ -1,57 +1,50 @@
-# ADSBin HTTP bench configuration (no OpenSSL required)
+# ADSBin AP+STA HTTP Wi-Fi bench test
 
-This branch uses the existing `ADSBin` open access point and HTTP page at
-`http://192.168.4.1/`. It requires no TLS keys, certificates, or OpenSSL.
+**Bench only.** The ADSBin SoftAP remains open at `http://192.168.4.1/`.
+Wi-Fi SSID and password can be saved via plain HTTP and ordinary, unencrypted
+NVS. This is intentionally insecure and must ONLY be used with a disposable
+test-network password. Never use credentials from a production network.
+WireGuard private-key provisioning remains disabled.
 
-**WARNING:** The access point is OPEN and the configuration API has NO
-authentication. Anyone able to join the ADSBin AP can view or change the
-non-secret fields. This mode is ONLY for isolated bench testing and must
-not be used on an untrusted network or exposed to the Internet.
+## Test sequence
+1. Flash this branch to ESP32-P4 using COM5.
+2. Join Wi-Fi `ADSBin`; browse to `http://192.168.4.1/`.
+3. In **Network**, enter the target router's WPA2-compatible Wi-Fi SSID and
+   disposable test password (8–63 characters), and press **Save settings**.
+4. Confirm the UI responds `Saved in NVS (server confirmed)`.
+5. Press **Test Wi-Fi connection**. This requests an asynchronous connection
+   on the hosted ESP32-C6 while leaving the ADSBin SoftAP enabled.
+6. Watch `Wi-Fi station` in the dashboard for DHCP IPv4, RSSI, retry count,
+   disconnect count, and last disconnect reason. The password is not returned
+   from `/api/config`; it only reports `wifi_password_configured`.
+7. Reboot: saved station settings will be retried automatically before SDR
+   streaming begins; verify the dashboard remains available at 192.168.4.1.
+8. Observe aircraft decoding, USB drops, and sample rate during Wi-Fi traffic.
 
-Enabled by default for bench builds with
-`CONFIG_ADSBIN_WEB_HTTP_CONFIG=y` in menuconfig. If disabled, the
-dashboard remains available but GET/POST /api/config is not registered.
+ESP-Hosted AP+STA support is hardware/firmware-version dependent. If the
+setup AP disappears, Wi-Fi setup fails, or USB reception degrades, flash
+the previous proven `feature/http-config-bench-20261118` branch using COM5.
 
-Editable and persisted in NVS namespace `web_cfg`:
-- `wifi_ssid` (non-secret)
-- `beast_host` (IPv4) and `beast_port`
-- `wg_public` (WireGuard peer PUBLIC key)
-- `wg_endpoint`, `wg_ip`, `wg_port`
+## Beast TCP destination – next stage
 
-**Optional isolated bench password test:** Enable
-`ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP=y` in `idf.py menuconfig`.
-This allows a disposable 8–63-character test Wi-Fi password in POST
-`/api/config`. The secret is stored under `wifi_pass` in ordinary NVS,
-never returned by GET, and loaded only when remote STA mode starts.
-The UI reports whether a password is present without revealing it.
-**HTTP, the AP, and NVS are unencrypted. Do not use production Wi-Fi
-credentials.** Disable this feature and erase any stored test password
-before field deployment. WireGuard PRIVATE keys and other credentials
-remain blocked. Unknown JSON fields are rejected.
+Default remote Beast destination is 192.168.107.20 port **30004** (readsb Beast
+INPUT by default). Port 30005 is typically Beast OUTPUT. Verify how Docker
+publishes readsb's 30004 on your DietPi host before testing connectivity.
 
-Application behavior:
-- Beast destination/port override is loaded when a new TCP connection is made
-  (only in remote mode when remote transport is already enabled).
-- Wi-Fi SSID override is loaded when station mode starts; it does **not**
-  enable station mode and it does **not** set a Wi-Fi password.
-- WireGuard public fields are **staged only** and do not yet modify the active
-  VPN; private key remains configured locally at build time.
-- The UI Save action is a persistence operation, not a full dynamic Apply.
-- USB and DSP firmware paths are unchanged.
+On DietPi:
+```bash
+clear
+cd /opt/adsb
+docker compose ps
+docker exec ultrafeeder sh -c 'ss -lnt 2>/dev/null | grep -E ":30004|:30005" || true'
+```
 
-To test, build and flash the branch to COM5, join ADSBin AP, visit the
-dashboard, select Network, edit `beast_host` and `beast_port`, click
-Save, refresh page, and verify persistence. Reboot and verify persistence
-again. Inspect `http://192.168.4.1/api/config` if debugging.
+If port 30004 is only exposed inside Docker rather than on host 192.168.107.20,
+publish 30004/tcp on the ultrafeeder service (or use another deliberate
+forwarding/connection architecture). Do not change your existing live feeds
+until the network path is confirmed.
 
-Do not merge until build succeeds and 1090 MHz RF throughput/aircraft
-decoding remain stable during HTTP operations. When secure provisioning is
-available, disable this open HTTP configuration endpoint.
-
-## Confirm Save works
-
-On the bench page, enter a harmless non-secret Beast host/port and press Save.
-The status text should state `Saved in NVS (server confirmed)`.
-Reload the page and confirm the same fields reappear, then reboot the board
-and check once more. Directly visit `http://192.168.4.1/api/config` to
-inspect saved non-secret fields. The Wi-Fi password is never included.
+This branch tests AP+STA and persistent Wi-Fi first; Beast forwarding in
+remote-only mode is still controlled by the existing remote receiver build
+options. Do not turn on remote WireGuard or transmit frames over an insecure
+untrusted remote path as part of this initial connection test.
