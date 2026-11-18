@@ -2194,9 +2194,15 @@ static void usb_task(void *arg)
 
     while (s_ctx.task_run) {
 
-        /* Pump the host library + client event loops (bounded waits). */
+        /* Poll daemon housekeeping without waiting: library-level events are
+         * infrequent, but client bulk-IN completions arrive every ~8 ms at
+         * 2 MS/s (32 KiB URBs). Waiting 20 ms for daemon events *before*
+         * pumping the client artificially caps transfer servicing at ~47 URBs/s
+         * (~0.77 MS/s) even after the DSP becomes fast enough. The client call
+         * below still blocks until actual USB activity (up to 20 ms), and our
+         * loop's tick-yield keeps IDLE0 healthy. */
         uint32_t flags = 0;
-        usb_host_lib_handle_events(pdMS_TO_TICKS(RTLSDR_EVENT_WAIT_MS), &flags);
+        usb_host_lib_handle_events(0, &flags);
         usb_host_client_handle_events(s_ctx.client, pdMS_TO_TICKS(RTLSDR_EVENT_WAIT_MS));
 
         /* Consume any hot-path notification (overflow/stall nudge). Non-blocking.*/
