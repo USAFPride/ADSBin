@@ -329,6 +329,17 @@ typedef struct {
     usb_transfer_t   *urb[RTLSDR_NUM_URBS];
     volatile uint32_t urbs_inflight;     /**< How many URBs are submitted now.   */
 
+    /* Diagnostic-only callback timing, updated on the USB task. These counters
+     * are sampled/reset outside the callback every ~10 seconds. */
+    int64_t  perf_last_cb_us;
+    uint64_t perf_gap_sum_us;
+    uint64_t perf_copy_sum_us;
+    uint64_t perf_pre_submit_sum_us;
+    uint64_t perf_submit_sum_us;
+    uint32_t perf_gap_max_us;
+    uint32_t perf_copy_max_us;
+    uint32_t perf_count;
+
     /* ---- the owned IQ ring (no-split; producer = Core-0 completion) ---- */
     RingbufHandle_t  iq_ring;            /**< Allocated at init, one per slot.   */
     uint32_t         block_seq;          /**< Monotonic iq_block_t.seq counter.  */
