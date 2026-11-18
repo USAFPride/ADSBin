@@ -2194,9 +2194,11 @@ static void usb_task(void *arg)
 
     while (s_ctx.task_run) {
 
-        /* Pump the host library + client event loops (bounded waits). */
+        /* Do not block on rare USB host-library maintenance events: the client
+         * must promptly service completed 32 KiB bulk-IN transfers. The client
+         * wait below still blocks for USB activity (up to the configured limit). */
         uint32_t flags = 0;
-        usb_host_lib_handle_events(pdMS_TO_TICKS(RTLSDR_EVENT_WAIT_MS), &flags);
+        usb_host_lib_handle_events(0, &flags);
         usb_host_client_handle_events(s_ctx.client, pdMS_TO_TICKS(RTLSDR_EVENT_WAIT_MS));
 
         /* Consume any hot-path notification (overflow/stall nudge). Non-blocking.*/
