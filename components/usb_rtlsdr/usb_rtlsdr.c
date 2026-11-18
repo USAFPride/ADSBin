@@ -79,6 +79,10 @@ static usb_rtlsdr_ctx_t s_ctx;
  * still 0 (i.e. for the very first dongle). */
 static adsbin_rf_role_t s_role_override = ADSBIN_ROLE_NONE;
 
+/* Bench diagnostics only: sample every 64th completed USB bulk transfer.
+ * Sparse 1-in-16 I/Q sampling minimizes hot-path impact. No tuning changes. */
+static uint32_t s_diag_urb_counter;
+
 /* How long the housekeeping task blocks in each host/client event pump before
  * looping to re-check its flags. Short enough that stop()/recovery is snappy. */
 #define RTLSDR_EVENT_WAIT_MS   20
@@ -1158,6 +1162,23 @@ static void bulk_in_cb(usb_transfer_t *xfer)
             off += chunk;
         }
 
+        /* Inspect one out of every 64 USB transfers for non-flatline I/Q data.
+         * The sparse scan is bounded and never allocates or blocks. */
+        uint32_t diag_pairs = 0;
+        uint8_t min_i = 255, max_i = 0, min_q = 255, max_q = 0;
+        const bool sample_iq = (d == &s_ctx.dev[0]) &&
+                               ((++s_diag_urb_counter & 63u) == 0u);
+        if (sample_iq) {
+            for (uint32_t k = 0; k + 1 < len; k += 32u) {
+                const uint8_t i = data[k], q = data[k + 1];
+                if (i < min_i) min_i = i;
+                if (i > max_i) max_i = i;
+                if (q < min_q) min_q = q;
+                if (q > max_q) max_q = q;
+                diag_pairs++;
+            }
+        }
+
         /* Roll the throughput + overflow counters in one short locked section.
          * total_bytes/total_blocks count what actually reached the ring (matches
          * iq_block_t.seq on the consumer side); overflow_drops counts the rest.
@@ -1166,6 +1187,13 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         d->stats.total_bytes    += bytes_here;
         d->stats.total_blocks   += delivered_here;
         d->stats.overflow_drops += dropped_here;
+        if (diag_pairs) {
+            d->stats.iq_min_i = min_i;
+            d->stats.iq_max_i = max_i;
+            d->stats.iq_min_q = min_q;
+            d->stats.iq_max_q = max_q;
+            d->stats.iq_sample_pairs = diag_pairs;
+        }
         d->last_block_us = now;
 
         /* Windowed effective-rate measurement (~1 s window). */
