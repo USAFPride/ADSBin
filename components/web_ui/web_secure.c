@@ -1,6 +1,5 @@
-/* Local HTTP bench configuration: non-secret values ONLY.
- * Anyone joined to the open ADSBin AP can read/write these fields.
- * Never accept Wi-Fi passwords, WireGuard private keys, or API credentials. */
+/* Local HTTP bench configuration. Credentials only when explicit unsafe
+ * Kconfig opt-in is enabled. Never echo passwords in GET or logs. */
 #include "sdkconfig.h"
 #ifdef CONFIG_ADSBIN_WEB_HTTP_CONFIG
 #include <stdio.h>
@@ -17,12 +16,20 @@ static esp_err_t metadata(httpd_req_t *r){
     nvs_handle_t n;
     if(nvs_open("web_cfg",NVS_READONLY,&n)!=ESP_OK){
         httpd_resp_set_type(r,"application/json");
-        return httpd_resp_sendstr(r,"{\"stored\":false,\"encrypted\":false}");
+        return httpd_resp_sendstr(r,"{\"stored\":false}");
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port","wg_public",
                         "wg_endpoint","wg_ip","wg_port"};
     cJSON *root=cJSON_CreateObject();
     cJSON_AddBoolToObject(root,"stored",true);
+#ifdef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
+    cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",true);
+#else
+    cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",false);
+#endif
+    size_t secret_len=0;
+    if(nvs_get_str(n,"wifi_pass",NULL,&secret_len)==ESP_OK && secret_len>1)
+        cJSON_AddBoolToObject(root,"wifi_password_configured",true);
     for(unsigned i=0;i<sizeof(keys)/sizeof(keys[0]);i++){
         size_t size=0;
         if(nvs_get_str(n,keys[i],NULL,&size)==ESP_OK && size>0){
@@ -66,15 +73,28 @@ static esp_err_t save(httpd_req_t *r){
         return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid JSON");
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port",
-                        "wg_public","wg_endpoint","wg_ip","wg_port"};
-    const size_t limits[]={32,45,5,44,128,15,5};
+                        "wg_public","wg_endpoint","wg_ip","wg_port",
+                        "wifi_pass"};
+    const size_t limits[]={32,45,5,44,128,15,5,63};
     for(const cJSON *item=root->child;item;item=item->next){
         int idx=-1;
-        for(int i=0;i<7;i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=i;break;}
+        for(int i=0;i<8;i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=i;break;}
         if(idx<0||!cJSON_IsString(item)||!item->valuestring||
            strlen(item->valuestring)>limits[idx]){
             cJSON_Delete(root);
             return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid field");
+        }
+        if(idx==7){
+#ifndef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
+            cJSON_Delete(root);
+            return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,"HTTP password saving disabled");
+#else
+            size_t pwlen=strlen(item->valuestring);
+            if(pwlen<8 || pwlen>63){
+                cJSON_Delete(root);
+                return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"WPA2 password must be 8-63 characters");
+            }
+#endif
         }
         if((idx==2||idx==6)&&item->valuestring[0]){
             char *end=NULL;long port=strtol(item->valuestring,&end,10);
