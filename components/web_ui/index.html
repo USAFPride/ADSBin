@@ -47,14 +47,14 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 </section>
 <section id="network" hidden>
 <div class="panel"><h2>Wi-Fi and Beast TCP configuration</h2>
-<div class="notice">Bench-only HTTP: this access point is open. If password entry is enabled in firmware, the Wi-Fi password travels over unencrypted HTTP and is stored in unencrypted NVS. Use only a disposable test-network password, never production credentials. WireGuard private-key entry remains disabled.</div>
+<div class="notice">Bench-only HTTP: this access point is open. The Wi-Fi password travels over unencrypted HTTP and is stored in unencrypted NVS. Use only a disposable test-network password, never production credentials. The ADSBin access point stays available while the receiver tests your router connection. WireGuard private-key entry remains disabled.</div>
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
-<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Bench option disabled in firmware" disabled><p id="wifiPassState" class="small">Checking password setting…</p></div>
+<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Enter a temporary test password (8–63 chars)"><p id="wifiPassState" class="small">Checking password setting…</p></div>
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
 </div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
-<p id="networkSaveNotice" class="small"></p><button id="saveNetwork" class="primary" type="button">Save settings</button>
+<p id="networkSaveNotice" class="small"></p><p id="wifiTestStatus" class="small">Wi-Fi station test not started.</p><button id="testWifi" class="primary" type="button">Test Wi-Fi connection</button> <button id="saveNetwork" class="primary" type="button">Save settings</button>
 </div></section>
 <section id="wireguard" hidden>
 <div class="panel"><h2>WireGuard client</h2>
@@ -95,11 +95,11 @@ async function loadSettings(){
   const maps={wifi_ssid:'ssid',beast_host:'beastHost',beast_port:'beastPort',
               wg_public:'wgPub',wg_endpoint:'wgEndpoint',wg_ip:'wgIP',wg_port:'wgPort'};
   Object.keys(maps).forEach(k=>{if(config[k]!==undefined)$(maps[k]).value=config[k];});
-  const canSavePassword=!!config.wifi_password_entry_enabled;
+  const canSavePassword=true;
   $('wifiPass').disabled=!canSavePassword;
-  $('wifiPass').placeholder=canSavePassword?'Enter new test password (8–63 chars); blank keeps existing':'Enable unsafe bench password option in menuconfig';
+  $('wifiPass').placeholder='Temporary test password (8–63 chars); blank keeps existing';
   $('wifiPassState').textContent=(config.wifi_password_configured?'Password saved; value hidden. ':'No saved password. ')+
-    (canSavePassword?'Use only disposable test credentials.':'Password entry is disabled in firmware.');
+    'Use only disposable test credentials.';
 
  }catch(e){
   $('networkSaveNotice').textContent='Unable to load saved settings: '+e.message;
@@ -135,6 +135,14 @@ $('saveNetwork').addEventListener('click',async ()=>{
   await loadSettings();
  }
 });
+$('testWifi').addEventListener('click',async ()=>{
+  $('wifiTestStatus').textContent='Requesting Wi-Fi connection test…';
+  try{
+   const response=await fetch('/api/wifi/test',{method:'POST'});
+   if(!response.ok)throw Error('HTTP '+response.status+' '+(await response.text()).slice(0,100));
+   $('wifiTestStatus').textContent='Connection requested. Watch DHCP/IP and RSSI updates below; the ADSBin AP remains active.';
+  }catch(e){$('wifiTestStatus').textContent='Could not start test: '+e.message;}
+});
 $('saveWireGuard').addEventListener('click',()=>saveSettings({
  wg_public:$('wgPub').value.trim(),
  wg_endpoint:$('wgEndpoint').value.trim(),
@@ -156,7 +164,10 @@ async function refresh(){
   $('temp').textContent=d.temperature_c===null?'—':d.temperature_c.toFixed(1)+' °C';
   $('uptime').textContent=Math.floor(d.uptime_s/3600)+'h '+Math.floor(d.uptime_s%3600/60)+'m';
   $('receiverHealth').textContent='USB: '+(d.usb_present?'Present':'Not detected')+' · '+(d.streaming?'Streaming':'Stopped')+' · USB stalls: '+d.usb_stalls+' · Reset count: '+d.usb_resets;
-  $('connectivity').textContent='Access point: '+(d.access_point?'Active':'Off')+' · Wi-Fi station: '+(d.station_connected?'Connected':'Disconnected')+' · Beast/WireGuard: pending live counters';
+  const sta=d.station_connected?'Connected '+(d.station_ip||'')+' ('+d.station_rssi+' dBm)':(d.station_connecting?'Connecting':'Disconnected');
+  $('connectivity').textContent='Access point: '+(d.access_point?'Active':'Off')+' · Wi-Fi station: '+sta+' · attempts '+d.wifi_attempts+' · disconnects '+d.wifi_disconnects+' · reason '+d.wifi_last_reason;
+  if(d.station_connected)$('wifiTestStatus').textContent='Wi-Fi connected. DHCP: '+d.station_ip+' · RSSI: '+d.station_rssi+' dBm';
+  else if(d.wifi_attempts>0)$('wifiTestStatus').textContent='Wi-Fi attempting: '+d.wifi_attempts+' · disconnects: '+d.wifi_disconnects+' · last reason: '+d.wifi_last_reason;
   $('raw').textContent=JSON.stringify(d,null,2);
  }catch(err){$('state').textContent='Web link unavailable';$('state').className='state err';}
 }
