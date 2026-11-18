@@ -77,6 +77,7 @@
 #include "sink_gdl90.h"     // GDL90 sink
 #include "sink_uat_weather.h" // GDL90 0x07 FIS-B weather relay sink
 #include "wifi_link.h"
+#include "web_ui.h"
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
 #include "wifi_station.h"
 #include "remote_beast.h"
@@ -174,6 +175,12 @@ static void rf_diag_task(void *arg)
  * ─────────────────────────────────────────────────────────────────────────── */
 static adsbin_pipeline_t s_pipeline;          /**< IQ ring + frame/msg queues.     */
 static traffic_handle_t  s_traffic;           /**< Traffic table instance.         */
+
+/* Safe snapshot for read-only web telemetry; traffic owns its own lock. */
+static size_t web_ui_aircraft_count(void)
+{
+    return s_traffic ? traffic_count(s_traffic) : 0u;
+}
 static sink_transport_t  s_cdc_transport;     /**< Shared USB-CDC byte transport.  */
 static sink_transport_t  s_udp_transport;     /**< Optional UDP-broadcast transport.*/
 static sink_handle_t     s_sink_debug;        /**< Optional debug sink.            */
@@ -1499,6 +1506,13 @@ esp_err_t adsbin_app_start(void)
 
     ESP_LOGI(TAG, "pipeline up: usb->demod(core0) -> decode/traffic/sinks(core1)%s",
              s_978_built ? " + 978 UAT/weather" : "");
+
+    /* Best-effort: the web server never gates SDR reception. It is read-only
+     * until authenticated TLS provisioning and encrypted NVS are available. */
+    esp_err_t web_err = web_ui_start(web_ui_aircraft_count);
+    if (web_err != ESP_OK) {
+        ESP_LOGW(TAG, "Web dashboard unavailable: %s", esp_err_to_name(web_err));
+    }
 
     return ESP_OK;
 }
