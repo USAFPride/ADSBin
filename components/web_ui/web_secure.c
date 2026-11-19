@@ -11,26 +11,19 @@
 #include "nvs.h"
 #include "cJSON.h"
 #include "web_ui.h"
+#include "wifi_station.h"
 static const char *TAG="web_secure";
 static esp_err_t metadata(httpd_req_t *r){
     nvs_handle_t n;
     if(nvs_open("web_cfg",NVS_READONLY,&n)!=ESP_OK){
         httpd_resp_set_type(r,"application/json");
-#ifdef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
         return httpd_resp_sendstr(r,"{\"stored\":false,\"wifi_password_entry_enabled\":true}");
-#else
-        return httpd_resp_sendstr(r,"{\"stored\":false,\"wifi_password_entry_enabled\":false}");
-#endif
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port","wg_public",
                         "wg_endpoint","wg_ip","wg_port"};
     cJSON *root=cJSON_CreateObject();
     cJSON_AddBoolToObject(root,"stored",true);
-#ifdef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
     cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",true);
-#else
-    cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",false);
-#endif
     size_t secret_len=0;
     if(nvs_get_str(n,"wifi_pass",NULL,&secret_len)==ESP_OK && secret_len>1)
         cJSON_AddBoolToObject(root,"wifi_password_configured",true);
@@ -89,16 +82,11 @@ static esp_err_t save(httpd_req_t *r){
             return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid field");
         }
         if(idx==7){
-#ifndef CONFIG_ADSBIN_BENCH_ALLOW_WIFI_PASSWORD_HTTP
-            cJSON_Delete(root);
-            return httpd_resp_send_err(r,HTTPD_403_FORBIDDEN,"HTTP password saving disabled");
-#else
             size_t pwlen=strlen(item->valuestring);
             if(pwlen<8 || pwlen>63){
                 cJSON_Delete(root);
-                return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"WPA2 password must be 8-63 characters");
+                return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Test Wi-Fi password must be 8-63 characters");
             }
-#endif
         }
         if((idx==2||idx==6)&&item->valuestring[0]){
             char *end=NULL;long port=strtol(item->valuestring,&end,10);
@@ -125,12 +113,23 @@ static esp_err_t save(httpd_req_t *r){
     httpd_resp_set_type(r,"application/json");
     return httpd_resp_sendstr(r,"{\"saved\":true,\"apply\":\"reboot_required\"}");
 }
+static esp_err_t wifi_test(httpd_req_t *req)
+{
+    esp_err_t err = wifi_station_request_test();
+    if (err != ESP_OK)
+        return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
+                                   "AP+STA not ready or test already running");
+    httpd_resp_set_type(req, "application/json");
+    return httpd_resp_sendstr(req, "{\"started\":true}");
+}
 esp_err_t web_ui_http_config_register(httpd_handle_t server)
 {
     const httpd_uri_t get={.uri="/api/config",.method=HTTP_GET,.handler=metadata};
     const httpd_uri_t post={.uri="/api/config",.method=HTTP_POST,.handler=save};
     esp_err_t err=httpd_register_uri_handler(server,&get);
     if(err==ESP_OK)err=httpd_register_uri_handler(server,&post);
+    const httpd_uri_t test={.uri="/api/wifi/test",.method=HTTP_POST,.handler=wifi_test};
+    if(err==ESP_OK)err=httpd_register_uri_handler(server,&test);
     if(err==ESP_OK)ESP_LOGW(TAG,"BENCH-ONLY HTTP config enabled; never submit secrets or expose AP to untrusted clients");
     return err;
 }
