@@ -48,3 +48,43 @@ This branch tests AP+STA and persistent Wi-Fi first; Beast forwarding in
 remote-only mode is still controlled by the existing remote receiver build
 options. Do not turn on remote WireGuard or transmit frames over an insecure
 untrusted remote path as part of this initial connection test.
+
+## Beast TCP LAN forwarding bench test
+
+Use the **Network** section of the ADSBin web page to save:
+
+- Beast destination IPv4: `192.168.107.20`
+- Beast TCP port: `30004`
+
+Then click **Enable forwarding**. This sets `beast_enabled=1` in NVS,
+which enables an outbound TCP connection over the tested Wi-Fi STA link.
+Disabling forwarding changes the flag to `0` and disconnects the sender
+on its next state check (normally within ~1 second).
+
+The sender transmits only frames passing ADSBin's existing Mode-S validation.
+It uses zero Beast timestamps and is **NOT MLAT capable**. This is a
+**trusted LAN, RFC1918 private IPv4 only** experiment; no WireGuard is started.
+
+The Network pane shows connected/disconnected, successful frames sent, queue
+drops, TCP connection attempts, and connection/send failures. A successful
+connection without incrementing sent frames can simply mean no aircraft were
+decoded in the test period.
+
+DietPi diagnostics:
+```bash
+clear
+cd /opt/adsb
+docker port ultrafeeder
+docker logs ultrafeeder --tail 40
+docker exec ultrafeeder sh -c 'ss -tn 2>/dev/null | grep 30004 || true'
+```
+
+If the `ss` command isn't included in the ultrafeeder image, the browser's
+TCP state and frame counters still provide a firmware-side first check.
+
+Verify the IP/port before enabling; the earlier default of 30004 requires
+the host mapping `30004:30004` under ultrafeeder in Compose. Do not modify
+your FlightAware or FR24 containers to perform this test.
+
+**IMPORTANT:** Build has not been tested in this environment. Keep this
+feature branch a draft and measure USB/DSP drops under Wi-Fi load.
