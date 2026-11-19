@@ -182,7 +182,10 @@ async function refresh(){
   else if(d.wifi_attempts>0)$('wifiTestStatus').textContent='Wi-Fi attempting: '+d.wifi_attempts+' · disconnects: '+d.wifi_disconnects+' · last reason: '+d.wifi_last_reason;
   $('beastState').textContent='Forwarding: '+(d.beast_enabled?(d.beast_connected?'TCP connected':'Enabled, awaiting connection'):'Disabled')+
    ' · frames sent: '+d.beast_sent+' · dropped: '+d.beast_dropped+
-   ' · attempts: '+d.beast_attempts+' · failures: '+d.beast_failures;
+   ' · attempts: '+d.beast_attempts+' · failures: '+d.beast_failures+
+   ' · reconnects: '+d.beast_reconnects+' · offline discarded: '+d.beast_discarded_offline+
+   ' · queued: '+d.beast_queued+' · last socket error: '+d.beast_last_socket_error+
+   ' · last successful send: '+(d.beast_last_send_uptime_s ? (d.uptime_s-d.beast_last_send_uptime_s)+' seconds ago' : 'not yet');
   $('raw').textContent=JSON.stringify(d,null,2);
  }catch(err){$('state').textContent='Web link unavailable';$('state').className='state err';}
 }

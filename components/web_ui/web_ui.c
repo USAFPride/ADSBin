@@ -65,7 +65,9 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        "\"station_connecting\":%s,\"station_ip\":\"%s\",\"station_rssi\":%d,"
        "\"wifi_attempts\":%lu,\"wifi_disconnects\":%lu,\"wifi_last_reason\":%lu,"
        "\"beast_enabled\":%s,\"beast_connected\":%s,\"beast_sent\":%lu,"
-       "\"beast_dropped\":%lu,\"beast_attempts\":%lu,\"beast_failures\":%lu}",
+       "\"beast_dropped\":%lu,\"beast_attempts\":%lu,\"beast_failures\":%lu,"
+       "\"beast_reconnects\":%lu,\"beast_discarded_offline\":%lu,"
+       "\"beast_last_send_uptime_s\":%lu,\"beast_queued\":%lu,\"beast_last_socket_error\":%d}",
        (unsigned long long)(esp_timer_get_time() / 1000000),
        (unsigned)(s_aircraft_count ? s_aircraft_count() : 0u),
        (unsigned long)usb.measured_sps,
@@ -89,7 +91,10 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        (unsigned long)station.last_reason,
        beast.enabled ? "true" : "false", beast.connected ? "true" : "false",
        (unsigned long)beast.sent, (unsigned long)beast.dropped,
-       (unsigned long)beast.connect_attempts, (unsigned long)beast.failures);
+       (unsigned long)beast.connect_attempts, (unsigned long)beast.failures,
+       (unsigned long)beast.reconnects, (unsigned long)beast.discarded_offline,
+       (unsigned long)beast.last_send_uptime_s, (unsigned long)beast.queued,
+       beast.last_socket_error);
     if (n < 0 || (size_t)n >= sizeof(out)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Snapshot overflow");
     }
