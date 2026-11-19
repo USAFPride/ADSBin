@@ -78,10 +78,9 @@
 #include "sink_uat_weather.h" // GDL90 0x07 FIS-B weather relay sink
 #include "wifi_link.h"
 #include "wifi_station.h"
+#include "remote_beast.h"
 #include "web_ui.h"
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
-#include "wifi_station.h"
-#include "remote_beast.h"
 #include "remote_wireguard.h"
 #endif      // open SoftAP on the on-board C6 (esp-hosted, S10)
 #include "status.h"         // LEDs + temperature watchdog
@@ -265,7 +264,7 @@ static void decode_task(void *arg)
             continue;
         }
 
-#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) || defined(CONFIG_ADSBIN_WEB_HTTP_CONFIG)
         remote_beast_offer(&frame);
 #endif
         // (a) Hand the decoded observation to the traffic task. Bounded wait so a
@@ -1424,8 +1423,11 @@ esp_err_t adsbin_app_start(void)
     esp_err_t wg_err = remote_wireguard_start();
     if (wg_err != ESP_OK) ESP_LOGW(TAG, "WireGuard start failed: %s", esp_err_to_name(wg_err));
 #endif
+#endif
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) || defined(CONFIG_ADSBIN_WEB_HTTP_CONFIG)
     esp_err_t beast_err = remote_beast_start();
-    if (beast_err != ESP_OK) ESP_LOGW(TAG, "Remote Beast start failed: %s", esp_err_to_name(beast_err));
+    if (beast_err != ESP_OK)
+        ESP_LOGW(TAG, "Beast TCP sender start failed: %s", esp_err_to_name(beast_err));
 #endif
     err = sinks_start(&loop_cfg);
     if (err != ESP_OK) {

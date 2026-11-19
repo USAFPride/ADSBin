@@ -14,6 +14,7 @@
 #include "status.h"
 #include "wifi_link.h"
 #include "wifi_station.h"
+#include "remote_beast.h"
 
 static const char *TAG = "web_ui";
 static httpd_handle_t s_server = NULL;
@@ -50,7 +51,9 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
 
     wifi_station_snapshot_t station = {0};
     wifi_station_get_snapshot(&station);
-    char out[900];
+    remote_beast_stats_t beast = {0};
+    remote_beast_get_stats(&beast);
+    char out[1100];
     int n = snprintf(out, sizeof(out),
        "{\"uptime_s\":%llu,\"aircraft\":%u,\"sample_sps\":%lu,"
        "\"usb_present\":%s,\"streaming\":%s,"
@@ -60,7 +63,9 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        "\"preambles\":%llu,\"frames\":%llu,"
        "\"temperature_c\":%s,\"access_point\":%s,\"station_connected\":%s,"
        "\"station_connecting\":%s,\"station_ip\":\"%s\",\"station_rssi\":%d,"
-       "\"wifi_attempts\":%lu,\"wifi_disconnects\":%lu,\"wifi_last_reason\":%lu}",
+       "\"wifi_attempts\":%lu,\"wifi_disconnects\":%lu,\"wifi_last_reason\":%lu,"
+       "\"beast_enabled\":%s,\"beast_connected\":%s,\"beast_sent\":%lu,"
+       "\"beast_dropped\":%lu,\"beast_attempts\":%lu,\"beast_failures\":%lu}",
        (unsigned long long)(esp_timer_get_time() / 1000000),
        (unsigned)(s_aircraft_count ? s_aircraft_count() : 0u),
        (unsigned long)usb.measured_sps,
@@ -81,7 +86,10 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        station.ip, station.rssi,
        (unsigned long)station.attempts,
        (unsigned long)station.disconnects,
-       (unsigned long)station.last_reason);
+       (unsigned long)station.last_reason,
+       beast.enabled ? "true" : "false", beast.connected ? "true" : "false",
+       (unsigned long)beast.sent, (unsigned long)beast.dropped,
+       (unsigned long)beast.connect_attempts, (unsigned long)beast.failures);
     if (n < 0 || (size_t)n >= sizeof(out)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Snapshot overflow");
     }

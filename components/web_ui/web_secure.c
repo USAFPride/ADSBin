@@ -20,7 +20,7 @@ static esp_err_t metadata(httpd_req_t *r){
         return httpd_resp_sendstr(r,"{\"stored\":false,\"wifi_password_entry_enabled\":true}");
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port","wg_public",
-                        "wg_endpoint","wg_ip","wg_port"};
+                        "wg_endpoint","wg_ip","wg_port","beast_enabled"};
     cJSON *root=cJSON_CreateObject();
     cJSON_AddBoolToObject(root,"stored",true);
     cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",true);
@@ -71,15 +71,21 @@ static esp_err_t save(httpd_req_t *r){
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port",
                         "wg_public","wg_endpoint","wg_ip","wg_port",
-                        "wifi_pass"};
-    const size_t limits[]={32,45,5,44,128,15,5,63};
+                        "wifi_pass","beast_enabled"};
+    const size_t limits[]={32,45,5,44,128,15,5,63,1};
     for(const cJSON *item=root->child;item;item=item->next){
         int idx=-1;
-        for(int i=0;i<8;i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=i;break;}
+        for(int i=0;i<9;i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=i;break;}
         if(idx<0||!cJSON_IsString(item)||!item->valuestring||
            strlen(item->valuestring)>limits[idx]){
             cJSON_Delete(root);
             return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid field");
+        }
+        if(idx==8 &&
+           (strlen(item->valuestring)!=1 ||
+            (item->valuestring[0]!='0' && item->valuestring[0]!='1'))) {
+            cJSON_Delete(root);
+            return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid Beast enable value");
         }
         if(idx==7){
             size_t pwlen=strlen(item->valuestring);
