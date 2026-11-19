@@ -54,7 +54,7 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
 </div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
-<p id="networkSaveNotice" class="small"></p><p id="wifiTestStatus" class="small">Wi-Fi station test not started.</p><button id="testWifi" class="primary" type="button">Test Wi-Fi connection</button> <button id="saveNetwork" class="primary" type="button">Save settings</button>
+<div class="panel"><h2>Beast forwarding to DietPi</h2><p id="beastState" class="small">Forwarding is disabled.</p><button id="beastToggle" class="primary" type="button">Enable forwarding</button><p class="small">Trusted LAN bench test only. This transmits validated aircraft frames to the saved Beast TCP destination. Timestamp is zero; not suitable for MLAT.</p></div><p id="networkSaveNotice" class="small"></p><p id="wifiTestStatus" class="small">Wi-Fi station test not started.</p><button id="testWifi" class="primary" type="button">Test Wi-Fi connection</button> <button id="saveNetwork" class="primary" type="button">Save settings</button>
 </div></section>
 <section id="wireguard" hidden>
 <div class="panel"><h2>WireGuard client</h2>
@@ -87,6 +87,16 @@ document.querySelectorAll('nav button').forEach(button=>button.addEventListener(
   document.querySelectorAll('main section').forEach(s=>s.hidden=s.id!==button.dataset.tab);
 }));
 function fmt(v){return v===null||v===undefined?'—':String(v)}
+let beastEnabled=false;
+function updateBeastButton(){
+  $('beastToggle').textContent=beastEnabled?'Disable forwarding':'Enable forwarding';
+}
+$('beastToggle').addEventListener('click',async ()=>{
+ if(!beastEnabled && !confirm('Enable unencrypted Beast TCP forwarding to the configured LAN destination?'))return;
+ const target=beastEnabled?'0':'1';
+ const saved=await saveSettings({beast_enabled:target},'networkSaveNotice');
+ if(saved){beastEnabled=target==='1';updateBeastButton();}
+});
 async function loadSettings(){
  try{
   const resp=await fetch('/api/config',{cache:'no-store'});
@@ -95,6 +105,7 @@ async function loadSettings(){
   const maps={wifi_ssid:'ssid',beast_host:'beastHost',beast_port:'beastPort',
               wg_public:'wgPub',wg_endpoint:'wgEndpoint',wg_ip:'wgIP',wg_port:'wgPort'};
   Object.keys(maps).forEach(k=>{if(config[k]!==undefined)$(maps[k]).value=config[k];});
+  beastEnabled=config.beast_enabled==='1';updateBeastButton();
   const canSavePassword=true;
   $('wifiPass').disabled=!canSavePassword;
   $('wifiPass').placeholder='Temporary test password (8–63 chars); blank keeps existing';
@@ -169,6 +180,9 @@ async function refresh(){
   if(d.station_connected)$('wifiTestStatus').textContent='Wi-Fi connected. DHCP: '+d.station_ip+' · RSSI: '+d.station_rssi+' dBm';
   else if(d.wifi_attempts>=10 && !d.station_connecting)$('wifiTestStatus').textContent='Connection test failed after retries. Check SSID, password and disconnect reason '+d.wifi_last_reason+'.';
   else if(d.wifi_attempts>0)$('wifiTestStatus').textContent='Wi-Fi attempting: '+d.wifi_attempts+' · disconnects: '+d.wifi_disconnects+' · last reason: '+d.wifi_last_reason;
+  $('beastState').textContent='Forwarding: '+(d.beast_enabled?(d.beast_connected?'TCP connected':'Enabled, awaiting connection'):'Disabled')+
+   ' · frames sent: '+d.beast_sent+' · dropped: '+d.beast_dropped+
+   ' · attempts: '+d.beast_attempts+' · failures: '+d.beast_failures;
   $('raw').textContent=JSON.stringify(d,null,2);
  }catch(err){$('state').textContent='Web link unavailable';$('state').className='state err';}
 }
