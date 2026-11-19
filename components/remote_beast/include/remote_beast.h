@@ -15,5 +15,10 @@ typedef struct {
     uint32_t dropped;
     uint32_t connect_attempts;
     uint32_t failures;
+    uint32_t reconnects;
+    uint32_t discarded_offline;
+    uint32_t last_send_uptime_s;
+    uint32_t queued;
+    int last_socket_error;
 } remote_beast_stats_t;
 void remote_beast_get_stats(remote_beast_stats_t *out);
