@@ -78,10 +78,9 @@
 #include "sink_uat_weather.h" // GDL90 0x07 FIS-B weather relay sink
 #include "wifi_link.h"
 #include "wifi_station.h"
+#include "remote_beast.h"
 #include "web_ui.h"
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
-#include "wifi_station.h"
-#include "remote_beast.h"
 #include "remote_wireguard.h"
 #endif      // open SoftAP on the on-board C6 (esp-hosted, S10)
 #include "status.h"         // LEDs + temperature watchdog
