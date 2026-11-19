@@ -38,9 +38,11 @@ static bool read_credentials(wifi_config_t *cfg)
     const char *default_ssid = "";
     const char *default_pass = "";
 #endif
-    size_t n = strnlen(default_ssid, sizeof(cfg->sta.ssid));
+    size_t n = strlen(default_ssid);
+    if (n > sizeof(cfg->sta.ssid)) n = sizeof(cfg->sta.ssid);
     memcpy(cfg->sta.ssid, default_ssid, n);
-    n = strnlen(default_pass, sizeof(cfg->sta.password));
+    n = strlen(default_pass);
+    if (n > sizeof(cfg->sta.password)) n = sizeof(cfg->sta.password);
     memcpy(cfg->sta.password, default_pass, n);
     nvs_handle_t prefs;
     if (nvs_open("web_cfg", NVS_READONLY, &prefs) == ESP_OK) {
