@@ -14,10 +14,30 @@
 #include <string.h>
 #include <unistd.h>
 
-#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) || defined(CONFIG_ADSBIN_WEB_HTTP_CONFIG)
 static const char *TAG = "remote_beast";
 static QueueHandle_t s_frames;
 static volatile uint32_t s_dropped;
+static volatile uint32_t s_sent, s_attempts, s_failures;
+static volatile bool s_connected;
+static bool bench_enabled(void) {
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+    return true;
+#else
+    nvs_handle_t prefs;
+    char value[3] = {0};
+    size_t len = sizeof(value);
+    if (nvs_open("web_cfg", NVS_READONLY, &prefs) != ESP_OK) return false;
+    bool enabled = nvs_get_str(prefs, "beast_enabled", value, &len) == ESP_OK && value[0] == '1';
+    nvs_close(prefs);
+    return enabled;
+#endif
+}
+#ifndef CONFIG_ADSBIN_REMOTE_ENABLE
+#define CONFIG_ADSBIN_REMOTE_HOST "192.168.107.20"
+#define CONFIG_ADSBIN_REMOTE_PORT 30004
+#define CONFIG_ADSBIN_REMOTE_QUEUE 256
+#endif
 /* Beast payload: escape every 0x1a; type '2' for 56-bit and '3' for 112-bit frames.
  * 48-bit timestamp is deliberately zero: ADSBin's rx_time_us is monotonic,
  * not an MLAT-qualified 12 MHz SDR timestamp. This remote feed is NOT for MLAT.
@@ -46,11 +66,12 @@ static void sender(void *arg)
     modes_frame_t frame;
     uint8_t buf[44];
     for (;;) {
-        if (!wifi_station_is_connected()) {
+        if (!wifi_station_is_connected() || !bench_enabled()) {
+            s_connected = false;
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
-#if !defined(CONFIG_ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN) && !defined(CONFIG_ADSBIN_REMOTE_WIREGUARD)
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) && !defined(CONFIG_ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN) && !defined(CONFIG_ADSBIN_REMOTE_WIREGUARD)
         /* No transport authorized: fail closed. */
         vTaskDelay(pdMS_TO_TICKS(2000));
         continue;
@@ -113,18 +134,22 @@ static void sender(void *arg)
         struct timeval timeout = {.tv_sec = 2, .tv_usec = 0};
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout));
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
+        __atomic_fetch_add(&s_attempts, 1, __ATOMIC_RELAXED);
         if (connect(fd, (struct sockaddr *)&target, sizeof(target)) != 0) {
+            __atomic_fetch_add(&s_failures, 1, __ATOMIC_RELAXED);
             close(fd);
             vTaskDelay(pdMS_TO_TICKS(2000));
             continue;
         }
-        ESP_LOGI(TAG, "Connected to Beast TCP receiver");
+        s_connected = true;
+        ESP_LOGI(TAG, "Connected to Beast TCP receiver %s:%u", beast_host, (unsigned)beast_port);
         xQueueReset(s_frames); // no stale frames after reconnect
-        while (wifi_station_is_connected() &&
+        while (wifi_station_is_connected() && bench_enabled()
 #ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
-               remote_wireguard_peer_up() &&
+               && remote_wireguard_peer_up()
 #endif
-               xQueueReceive(s_frames, &frame, pdMS_TO_TICKS(2000)) == pdTRUE) {
+               ) {
+            if (xQueueReceive(s_frames, &frame, pdMS_TO_TICKS(1000)) != pdTRUE) continue;
             size_t n = encode(&frame, buf, sizeof(buf));
             if (!n) continue;
             size_t offset = 0;
@@ -136,8 +161,10 @@ static void sender(void *arg)
                 if (written <= 0) break;
                 offset += (size_t)written;
             }
-            if (offset != n) break;
+            if (offset != n) { __atomic_fetch_add(&s_failures, 1, __ATOMIC_RELAXED); break; }
+            __atomic_fetch_add(&s_sent, 1, __ATOMIC_RELAXED);
         }
+        s_connected = false;
         close(fd);
         vTaskDelay(pdMS_TO_TICKS(500));
 #endif
@@ -155,9 +182,24 @@ esp_err_t remote_beast_start(void)
 void remote_beast_offer(const modes_frame_t *f)
 {
     if (!f || !s_frames) return;
-    if (xQueueSend(s_frames, f, 0) != pdTRUE) s_dropped++;
+    if (xQueueSend(s_frames, f, 0) != pdTRUE) __atomic_fetch_add(&s_dropped, 1, __ATOMIC_RELAXED);
 }
 #else
 esp_err_t remote_beast_start(void) { return ESP_ERR_NOT_SUPPORTED; }
 void remote_beast_offer(const modes_frame_t *f) { (void)f; }
 #endif
+
+void remote_beast_get_stats(remote_beast_stats_t *out)
+{
+    if (!out) return;
+    memset(out, 0, sizeof(*out));
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) || defined(CONFIG_ADSBIN_WEB_HTTP_CONFIG)
+    out->enabled = bench_enabled();
+    out->connected = s_connected;
+    out->sent = __atomic_load_n(&s_sent, __ATOMIC_RELAXED);
+    out->dropped = __atomic_load_n(&s_dropped, __ATOMIC_RELAXED);
+    out->connect_attempts = __atomic_load_n(&s_attempts, __ATOMIC_RELAXED);
+    out->failures = __atomic_load_n(&s_failures, __ATOMIC_RELAXED);
+#endif
+}
+
