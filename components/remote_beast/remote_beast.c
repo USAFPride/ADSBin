@@ -9,6 +9,7 @@
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include "nvs.h"
+#include "esp_timer.h"
 #include <stdlib.h>
 #include <errno.h>
 #include <string.h>
@@ -24,12 +25,21 @@ static bool bench_enabled(void) {
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
     return true;
 #else
+    /* Cache NVS lookup for one second; never touch flash for every frame. */
+    static int64_t checked_us = 0;
+    static bool cached = false;
+    int64_t now = esp_timer_get_time();
+    if (checked_us && now - checked_us < 1000000) return cached;
     nvs_handle_t prefs;
     char value[3] = {0};
     size_t len = sizeof(value);
-    if (nvs_open("web_cfg", NVS_READONLY, &prefs) != ESP_OK) return false;
-    bool enabled = nvs_get_str(prefs, "beast_enabled", value, &len) == ESP_OK && value[0] == '1';
-    nvs_close(prefs);
+    bool enabled = false;
+    if (nvs_open("web_cfg", NVS_READONLY, &prefs) == ESP_OK) {
+        enabled = nvs_get_str(prefs, "beast_enabled", value, &len) == ESP_OK && value[0] == '1';
+        nvs_close(prefs);
+    }
+    cached = enabled;
+    checked_us = now;
     return enabled;
 #endif
 }
@@ -115,6 +125,18 @@ static void sender(void *arg)
             vTaskDelay(pdMS_TO_TICKS(5000));
             continue;
         }
+#ifndef CONFIG_ADSBIN_REMOTE_ENABLE
+        /* Bench forwarding is trusted private-LAN ONLY, never arbitrary public IP. */
+        uint32_t addr = ntohl(target.sin_addr.s_addr);
+        bool private_ip = (addr >> 24 == 10) ||
+                          ((addr >> 20) == 0xAC1) ||
+                          ((addr >> 16) == 0xC0A8);
+        if (!private_ip) {
+            ESP_LOGW(TAG, "Bench forwarding requires a private RFC1918 IPv4 destination");
+            vTaskDelay(pdMS_TO_TICKS(3000));
+            continue;
+        }
+#endif
         int fd = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
         if (fd < 0) { vTaskDelay(pdMS_TO_TICKS(2000)); continue; }
 #ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
