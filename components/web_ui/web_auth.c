@@ -15,6 +15,7 @@
 #include <stdint.h>
 #include <string.h>
 #include <ctype.h>
+#include <errno.h>
 
 #define SESSION_SECONDS 1800LL
 #define SESSION_SLOTS 4
@@ -54,8 +55,13 @@ static bool endpoints(httpd_req_t *r,uint32_t *peer,uint32_t *local) {
     struct sockaddr_storage p={0},l={0};
     socklen_t pn=sizeof(p),ln=sizeof(l);
     int fd=httpd_req_to_sockfd(r);
-    if(fd<0 || getpeername(fd,(struct sockaddr*)&p,&pn)!=0 ||
-       getsockname(fd,(struct sockaddr*)&l,&ln)!=0) return false;
+    if(fd<0) { ESP_LOGW("web_auth","Invalid HTTP socket"); return false; }
+    if(getpeername(fd,(struct sockaddr*)&p,&pn)!=0) {
+        ESP_LOGW("web_auth","getpeername failed errno=%d",errno); return false;
+    }
+    if(getsockname(fd,(struct sockaddr*)&l,&ln)!=0) {
+        ESP_LOGW("web_auth","getsockname failed errno=%d",errno); return false;
+    }
     if(!ipv4_endpoint(&p,peer) || !ipv4_endpoint(&l,local)) {
         ESP_LOGW("web_auth","Rejected socket families peer=%d local=%d",(int)p.ss_family,(int)l.ss_family);
         return false;
@@ -69,13 +75,28 @@ static bool private_ip(uint32_t ip) {
 static bool on_interface(const char *key,uint32_t peer,uint32_t local) {
     esp_netif_t *n=esp_netif_get_handle_from_ifkey(key);
     esp_netif_ip_info_t info={0};
-    if(!n || !esp_netif_is_netif_up(n) || esp_netif_get_ip_info(n,&info)!=ESP_OK ||
-       info.ip.addr!=local || !info.netmask.addr || !private_ip(peer) || !private_ip(local)) return false;
-    return (peer & info.netmask.addr)==(local & info.netmask.addr) && peer!=info.gw.addr && peer!=local;
+    if(!n) { ESP_LOGW("web_auth","Interface %s not found",key); return false; }
+    esp_err_t e=esp_netif_get_ip_info(n,&info);
+    if(e!=ESP_OK) { ESP_LOGW("web_auth","Interface %s IP query failed: %s",key,esp_err_to_name(e)); return false; }
+    /* Hosted Wi-Fi can report a stale administrative up flag. The accepted
+     * TCP socket must still terminate at the actual configured interface IP,
+     * and the client must be in that interface's private IPv4 subnet.
+     * Do not authorize by Host header or permit a wildcard destination. */
+    bool match=info.ip.addr==local && info.netmask.addr && private_ip(peer) && private_ip(local) &&
+        (peer & info.netmask.addr)==(local & info.netmask.addr) && peer!=info.gw.addr && peer!=local;
+    if(!match) {
+        char ip[INET_ADDRSTRLEN]={0},mask[INET_ADDRSTRLEN]={0},gw[INET_ADDRSTRLEN]={0};
+        inet_ntop(AF_INET,&info.ip.addr,ip,sizeof(ip));
+        inet_ntop(AF_INET,&info.netmask.addr,mask,sizeof(mask));
+        inet_ntop(AF_INET,&info.gw.addr,gw,sizeof(gw));
+        ESP_LOGW("web_auth","Interface %s up=%d ip=%s mask=%s gateway=%s mismatch",key,esp_netif_is_netif_up(n),ip,mask,gw);
+    }
+    return match;
 }
 bool web_auth_local(httpd_req_t *r,bool ap_only) {
     uint32_t peer,local;
-    if(!device_security_ready() || !endpoints(r,&peer,&local)) return false;
+    if(!device_security_ready()) { ESP_LOGW("web_auth","Security vault not ready"); return false; }
+    if(!endpoints(r,&peer,&local)) return false;
     if(on_interface("WIFI_AP_DEF",peer,local)) return true;
     if(!ap_only && device_security_configured() && on_interface("WIFI_STA_DEF",peer,local)) return true;
     char p[INET_ADDRSTRLEN]={0},l[INET_ADDRSTRLEN]={0};
