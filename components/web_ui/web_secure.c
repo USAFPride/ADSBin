@@ -23,7 +23,7 @@ static esp_err_t metadata(httpd_req_t *r){
         return httpd_resp_sendstr(r,"{\"stored\":false,\"wifi_password_entry_enabled\":true}");
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port","wg_public",
-                        "wg_endpoint","wg_ip","wg_port","beast_enabled"};
+                        "wg_endpoint","wg_ip","wg_port","beast_enabled","mgmt_cidr"};
     cJSON *root=cJSON_CreateObject();
     cJSON_AddBoolToObject(root,"stored",true);
     cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",true);
@@ -75,8 +75,8 @@ static esp_err_t save(httpd_req_t *r){
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port",
                         "wg_public","wg_endpoint","wg_ip","wg_port",
-                        "wifi_pass","beast_enabled","wg_private","wg_psk"};
-    const size_t limits[]={32,45,5,44,128,15,5,63,1,44,44};
+                        "wifi_pass","beast_enabled","wg_private","wg_psk","mgmt_cidr"};
+    const size_t limits[]={32,45,5,44,128,15,5,63,1,44,44,31};
     for(const cJSON *item=root->child;item;item=item->next){
         int idx=-1;
         for(unsigned i=0;i<sizeof(keys)/sizeof(keys[0]);i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=(int)i;break;}
@@ -84,6 +84,9 @@ static esp_err_t save(httpd_req_t *r){
            strlen(item->valuestring)>limits[idx]){
             cJSON_Delete(root);
             return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid field");
+        }
+        if(idx==11 && (!web_auth_local(r,true) || !web_auth_valid_management_cidr(item->valuestring))) {
+            cJSON_Delete(root); return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Change management CIDR from AP only; use private network CIDR or blank");
         }
         if(idx==8 &&
            (strlen(item->valuestring)!=1 ||
