@@ -232,9 +232,7 @@ static esp_err_t setup(httpd_req_t *r) {
     if(!valid) return bad(r,"Passwords must match: 12-63 printable ASCII characters");
     if(e!=ESP_OK) return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Secure setup failed");
     memset(sessions,0,sizeof(sessions));
-    esp_err_t result=json(r,"{\"saved\":true,\"restart\":true}");
-    device_security_schedule_restart();
-    return result;
+    return json(r,"{\"saved\":true,\"restart\":false}");
 }
 static void fail_login(void) {
     invalid_attempts++;
@@ -296,9 +294,7 @@ static esp_err_t change(httpd_req_t *r) {
     invalid_attempts=0; next_login=0;
     memset(sessions,0,sizeof(sessions));
     httpd_resp_set_hdr(r,"Set-Cookie","ads_session=; Path=/; Max-Age=0; HttpOnly; SameSite=Strict");
-    esp_err_t result=json(r,"{\"saved\":true,\"restart\":true}");
-    device_security_schedule_restart();
-    return result;
+    return json(r,"{\"saved\":true,\"restart\":false}");
 }
 esp_err_t web_auth_register(httpd_handle_t server) {
     const httpd_uri_t routes[]={
