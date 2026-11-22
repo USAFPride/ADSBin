@@ -24,14 +24,17 @@ input:focus{outline:2px solid #5687c3}button.primary{background:#3176bf;color:wh
 button.primary:disabled{background:#334054;cursor:not-allowed}
 .notice{border-left:3px solid #d4ad55;background:#29251d;padding:12px 16px;margin:14px 0;font-size:13px;line-height:1.6}
 pre{overflow:auto;color:#91cfbb;font-size:12px;line-height:1.6}section[hidden]{display:none}
-footer{margin-top:25px;color:#7588a4;font-size:12px}
+footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!important}
 </style>
 </head>
 <body>
 <header><div><div class="logo">ADSBin <span style="color:#59a9ff">/</span> Receiver</div><div class="sub">ESP32-P4 · Remote ADS-B receiver</div></div><span id="state" class="state">Connecting…</span></header>
 <main>
+<div id="authGate" class="panel" style="max-width:520px;margin:24px auto" hidden>
+<h2 id="authTitle">ADSBin login</h2><p id="authHelp" class="small"></p><form id="authForm"><label for="authPass">Device password</label><input id="authPass" type="password" required autocomplete="current-password"><div id="authConfirmRow" hidden style="margin-top:14px"><label for="authConfirm">Confirm device password</label><input id="authConfirm" type="password" autocomplete="new-password"></div><p class="small" id="authMessage" role="status"></p><button class="primary" id="authSubmit">Login</button></form></div>
+<div id="app" hidden>
 <nav aria-label="Sections">
-<button class="active" data-tab="dashboard">Dashboard</button><button data-tab="network">Network</button><button data-tab="wireguard">WireGuard</button><button data-tab="receiver">Receiver</button><button data-tab="system">System</button>
+<button class="active" data-tab="dashboard">Dashboard</button><button data-tab="network">Network</button><button data-tab="wireguard">WireGuard</button><button data-tab="receiver">Receiver</button><button data-tab="security">Security</button><button data-tab="system">System</button><button id="logout" type="button">Logout</button>
 </nav>
 <section id="dashboard">
 <div class="grid">
@@ -47,10 +50,10 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 </section>
 <section id="network" hidden>
 <div class="panel"><h2>Wi-Fi and Beast TCP configuration</h2>
-<div class="notice">Bench-only HTTP: this access point is open. The Wi-Fi password travels over unencrypted HTTP and is stored in unencrypted NVS. Use only a disposable test-network password, never production credentials. The ADSBin access point stays available while the receiver tests your router connection. WireGuard private-key entry remains disabled.</div>
+<div class="notice">Local HTTP only. Use a trusted network or the password-protected ADSBin AP. Test vault encryption protects stored values from accidental plaintext disclosure; its key is not hardware-protected. Do not use real production credentials during this test.</div>
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
-<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Enter a temporary test password (8–63 chars)"><p id="wifiPassState" class="small">Checking password setting…</p></div>
+<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Enter Wi-Fi password (8–63 chars)"><p id="wifiPassState" class="small">Checking password setting…</p></div>
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
 </div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
@@ -58,14 +61,14 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 </div></section>
 <section id="wireguard" hidden>
 <div class="panel"><h2>WireGuard client</h2>
-<div class="notice">WireGuard private keys cannot be entered or stored here. Public peer settings can be saved for later integration; current VPN startup still uses compiled settings.</div>
+<div class="notice">Credentials are stored in the development vault and never displayed after saving. WireGuard tunnel activation is not implemented in this PR.</div>
 <div class="row">
-<div><label for="wgPriv">Client private key</label><input id="wgPriv" type="password" autocomplete="off" placeholder="Unavailable: encrypted NVS pending" disabled></div>
-<div><label for="wgPub">Server public key</label><input id="wgPub" type="text" autocomplete="off"></div>
+<div><label for="wgPriv">Client private key</label><input id="wgPriv" type="password" autocomplete="off" placeholder="Base64 private key; blank keeps saved key"></div>
+<div><label for="wgPsk">Preshared key (optional)</label><input id="wgPsk" type="password" autocomplete="off" placeholder="Blank keeps saved key"></div><div><label for="wgPub">Server public key</label><input id="wgPub" type="text" autocomplete="off"></div>
 <div><label for="wgEndpoint">VPN endpoint</label><input id="wgEndpoint" placeholder="hostname or IPv4"></div>
 <div><label for="wgPort">UDP port</label><input id="wgPort" type="number" value="51820" min="1" max="65535"></div>
 <div><label for="wgIP">Tunnel IPv4</label><input id="wgIP" placeholder="10.50.0.20"></div>
-</div><p id="wireguardSaveNotice" class="small"></p><button id="saveWireGuard" class="primary" type="button">Save public peer settings</button>
+</div><p id="wireguardSaveNotice" class="small"></p><button id="saveWireGuard" class="primary" type="button">Save WireGuard settings</button>
 </div></section>
 <section id="receiver" hidden>
 <div class="panel"><h2>SDR configuration</h2><div class="row">
@@ -74,17 +77,78 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}
 <div><label>USB transfer size</label><input value="32 KiB" disabled></div>
 </div><p class="small">Live receiver metrics appear on Dashboard. RF settings remain on the validated baseline until runtime configuration is implemented.</p></div>
 </section>
-<section id="system" hidden>
+<section id="security" hidden><div class="panel"><h2>Device password</h2><p class="small">The same password secures the AP and web administration. Changing it restarts the device, disconnects clients, and invalidates every session.</p><form id="changeForm"><div class="row"><div><label for="currentPass">Current password</label><input id="currentPass" type="password" required autocomplete="current-password"></div><div><label for="newPass">New password</label><input id="newPass" type="password" required autocomplete="new-password"></div><div><label for="confirmPass">Confirm password</label><input id="confirmPass" type="password" required autocomplete="new-password"></div></div><p id="passwordMessage" class="small" role="status"></p><button class="primary">Change password</button></form></div><div class="panel"><h2>Physical recovery</h2><p class="small">Press and release BOOT five times within ten seconds to erase saved settings and return to first-time setup. RST only restarts the device. No remote factory reset endpoint exists.</p></div><div class="panel"><h2>Development storage protection</h2><p class="small">AES-GCM encrypted secret values; PBKDF2 password hash; key stored in flash for reversible development. No eFuse programming or production physical-extraction protection. HTTP has no transport encryption.</p></div></section><section id="system" hidden>
 <div class="panel"><h2>System information</h2><pre id="raw">Loading…</pre></div>
 <div class="panel"><h2>Maintenance</h2><p class="small">Firmware update, reboot, configuration import/export, and secure provisioning will be added after authentication and recovery safeguards.</p></div>
 </section>
 <footer>ADSBin experimental firmware · Values refresh every 3 seconds · Receiver operation does not depend on this page.</footer>
+</div>
 </main>
 <script>
 const $=id=>document.getElementById(id);
-document.querySelectorAll('nav button').forEach(button=>button.addEventListener('click',()=>{
+let authenticated=false, setupMode=false, polling=null;
+function showAuth(configured,msg='') {
+ authenticated=false;
+ if(polling){clearInterval(polling);polling=null;}
+ setupMode=!configured;
+ $('app').hidden=true;$('authGate').hidden=false;
+ $('authTitle').textContent=setupMode?'Initialize ADSBin':'ADSBin login';
+ $('authHelp').textContent=setupMode?'Create one password (12–63 printable ASCII characters) for both Wi-Fi AP and web administration. The open AP is unencrypted during setup.':'Enter your device password. Use trusted local networks only.';
+ $('authConfirmRow').hidden=!setupMode;
+ $('authConfirm').required=setupMode;
+ $('authPass').autocomplete=setupMode?'new-password':'current-password';
+ $('authSubmit').textContent=setupMode?'Initialize device':'Login';
+ $('authMessage').textContent=msg;
+ $('authPass').value='';$('authConfirm').value='';
+}
+function showApp(){
+ authenticated=true;$('authGate').hidden=true;$('app').hidden=false;
+ loadSettings();refresh();
+ if(!polling)polling=setInterval(refresh,3000);
+}
+async function authState(){
+ try{
+  const r=await fetch('/api/auth/state',{cache:'no-store'});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  const d=await r.json();
+  if(d.authenticated)showApp();else showAuth(d.configured);
+ }catch(e){
+  showAuth(true,'Management is unavailable on this network: '+e.message);
+ }
+}
+async function authPost(route,payload){
+ const r=await fetch(route,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+ if(!r.ok)throw Error((await r.text()).slice(0,150));
+ return r.json();
+}
+$('authForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ const pass=$('authPass').value,confirm=$('authConfirm').value;
+ $('authSubmit').disabled=true;
+ try{
+  if(setupMode){
+   await authPost('/api/auth/setup',{password:pass,confirm});
+   showAuth(true,'Saved. Reconnect to ADSBin using the new password, then log in. The device is restarting.');
+  } else {
+   await authPost('/api/auth/login',{password:pass});$('authPass').value='';showApp();
+  }
+ }catch(e){$('authMessage').textContent=e.message;}
+ finally{$('authSubmit').disabled=false;}
+});
+$('logout').addEventListener('click',async()=>{
+ try{await authPost('/api/auth/logout',{});showAuth(true,'Logged out.');}catch(e){showAuth(true,'Session ended; log in again.');}
+});
+$('changeForm').addEventListener('submit',async e=>{
+ e.preventDefault();
+ if(!confirm('Change the AP and administrator password and restart the device?'))return;
+ try{
+  await authPost('/api/auth/password',{current:$('currentPass').value,password:$('newPass').value,confirm:$('confirmPass').value});
+  $('changeForm').reset();showAuth(true,'Password changed. Reconnect to the AP with the new password. Restarting…');
+ }catch(e){$('passwordMessage').textContent=e.message;}
+});
+document.querySelectorAll('nav button[data-tab]').forEach(button=>button.addEventListener('click',()=>{
   document.querySelectorAll('nav button').forEach(b=>b.classList.toggle('active',b===button));
-  document.querySelectorAll('main section').forEach(s=>s.hidden=s.id!==button.dataset.tab);
+  document.querySelectorAll('#app section').forEach(s=>s.hidden=s.id!==button.dataset.tab);
 }));
 function fmt(v){return v===null||v===undefined?'—':String(v)}
 let beastEnabled=false;
@@ -108,15 +172,16 @@ async function loadSettings(){
   beastEnabled=config.beast_enabled==='1';updateBeastButton();
   const canSavePassword=true;
   $('wifiPass').disabled=!canSavePassword;
-  $('wifiPass').placeholder='Temporary test password (8–63 chars); blank keeps existing';
+  $('wifiPass').placeholder='Wi-Fi password (8–63 chars); blank keeps existing';
   $('wifiPassState').textContent=(config.wifi_password_configured?'Password saved; value hidden. ':'No saved password. ')+
-    'Use only disposable test credentials.';
+    'Stored in development vault; use test credentials only.';
+  $('wgPriv').placeholder=config.wg_private_configured?'Private key saved; blank keeps existing':'Base64 private key';
+  $('wgPsk').placeholder=config.wg_psk_configured?'Preshared key saved; blank keeps existing':'Optional base64 preshared key';
 
  }catch(e){
   $('networkSaveNotice').textContent='Unable to load saved settings: '+e.message;
  }
 }
-loadSettings();
 async function saveSettings(payload,noticeId){
  try{
   const resp=await fetch('/api/config',{method:'POST',
@@ -137,7 +202,7 @@ $('saveNetwork').addEventListener('click',async ()=>{
  if(password){
   if($('wifiPass').disabled){$('networkSaveNotice').textContent='Password entry is disabled';return;}
   if(password.length<8||password.length>63){$('networkSaveNotice').textContent='Password must have 8–63 characters';return;}
-  if(!confirm('Bench-only: send this test Wi-Fi password over unencrypted HTTP and store it in unencrypted NVS?'))return;
+  if(!confirm('Send this test Wi-Fi password over local HTTP and store it in the development vault?'))return;
   payload.wifi_pass=password;
  }
  const saved=await saveSettings(payload,'networkSaveNotice');
@@ -149,21 +214,24 @@ $('saveNetwork').addEventListener('click',async ()=>{
 $('testWifi').addEventListener('click',async ()=>{
   $('wifiTestStatus').textContent='Requesting Wi-Fi connection test…';
   try{
-   const response=await fetch('/api/wifi/test',{method:'POST'});
+   const response=await fetch('/api/wifi/test',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
    if(!response.ok)throw Error('HTTP '+response.status+' '+(await response.text()).slice(0,100));
    $('wifiTestStatus').textContent='Connection requested. Watch DHCP/IP and RSSI updates below; the ADSBin AP remains active.';
   }catch(e){$('wifiTestStatus').textContent='Could not start test: '+e.message;}
 });
-$('saveWireGuard').addEventListener('click',()=>saveSettings({
- wg_public:$('wgPub').value.trim(),
- wg_endpoint:$('wgEndpoint').value.trim(),
- wg_ip:$('wgIP').value.trim(),
- wg_port:$('wgPort').value.trim()
-},'wireguardSaveNotice'));
+$('saveWireGuard').addEventListener('click',async()=>{
+ const payload={wg_public:$('wgPub').value.trim(),wg_endpoint:$('wgEndpoint').value.trim(),wg_ip:$('wgIP').value.trim(),wg_port:$('wgPort').value.trim()};
+ const key=$('wgPriv').value.trim(),psk=$('wgPsk').value.trim();
+ if(key)payload.wg_private=key;
+ if(psk)payload.wg_psk=psk;
+ if((key||psk)&&!confirm('Store test WireGuard credentials in the reversible development vault over local HTTP?'))return;
+ if(await saveSettings(payload,'wireguardSaveNotice')){$('wgPriv').value='';$('wgPsk').value='';await loadSettings();}
+});
 
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});
+  if(r.status===401){showAuth(true,'Session expired. Log in again.');return;}
   if(!r.ok)throw Error('HTTP '+r.status);
   const d=await r.json();
   $('state').textContent=d.streaming?'Receiving':'Not streaming';
@@ -178,7 +246,7 @@ async function refresh(){
   const sta=d.station_connected?'Connected '+(d.station_ip||'')+' ('+d.station_rssi+' dBm)':(d.station_connecting?'Connecting':'Disconnected');
   $('connectivity').textContent='Access point: '+(d.access_point?'Active':'Off')+' · Wi-Fi station: '+sta+' · attempts '+d.wifi_attempts+' · disconnects '+d.wifi_disconnects+' · reason '+d.wifi_last_reason;
   if(d.station_connected)$('wifiTestStatus').textContent='Wi-Fi connected. DHCP: '+d.station_ip+' · RSSI: '+d.station_rssi+' dBm';
-  else if(d.wifi_attempts>=10 && !d.station_connecting)$('wifiTestStatus').textContent='Connection test failed after retries. Check SSID, password and disconnect reason '+d.wifi_last_reason+'.';
+  else if(d.wifi_attempts>0 && !d.station_connecting)$('wifiTestStatus').textContent='Waiting for next automatic Wi-Fi retry; last reason '+d.wifi_last_reason+'.';
   else if(d.wifi_attempts>0)$('wifiTestStatus').textContent='Wi-Fi attempting: '+d.wifi_attempts+' · disconnects: '+d.wifi_disconnects+' · last reason: '+d.wifi_last_reason;
   $('beastState').textContent='Forwarding: '+(d.beast_enabled?(d.beast_connected?'TCP connected':'Enabled, awaiting connection'):'Disabled')+
    ' · frames sent: '+d.beast_sent+' · dropped: '+d.beast_dropped+
@@ -189,5 +257,5 @@ async function refresh(){
   $('raw').textContent=JSON.stringify(d,null,2);
  }catch(err){$('state').textContent='Web link unavailable';$('state').className='state err';}
 }
-refresh();setInterval(refresh,3000);
+authState();
 </script></body></html>
