@@ -31,6 +31,7 @@ static bool configured;
 typedef struct {
     uint8_t salt[16];
     uint8_t hash[32];
+    /* Reserved for compatibility with the initial PR15 account layout. */
     uint8_t nonce[12];
     uint8_t ciphertext[64 + 16];
 } account_t;
@@ -136,16 +137,10 @@ bool device_security_valid_password(const char *p) {
 esp_err_t device_security_set_password(const char *pass) {
     if(!device_security_ready() || !device_security_valid_password(pass)) return ESP_ERR_INVALID_ARG;
     account_t a={0};
-    uint8_t padded[64]={0};
-    memcpy(padded,pass,strlen(pass));
     esp_fill_random(a.salt,sizeof(a.salt));
-    esp_fill_random(a.nonce,sizeof(a.nonce));
-    size_t ct_len=0;
     esp_err_t e=ESP_FAIL;
     xSemaphoreTake(lock,portMAX_DELAY);
-    if(hash_password(pass,a.salt,a.hash) &&
-       crypt(true,"account",a.nonce,padded,sizeof(padded),a.ciphertext,sizeof(a.ciphertext),&ct_len)==ESP_OK &&
-       ct_len==sizeof(a.ciphertext)) {
+    if(hash_password(pass,a.salt,a.hash)) {
         nvs_handle_t n;
         e=nvs_open(VAULT_NS,NVS_READWRITE,&n);
         if(e==ESP_OK) {
@@ -156,7 +151,7 @@ esp_err_t device_security_set_password(const char *pass) {
         if(e==ESP_OK) configured=true;
     }
     xSemaphoreGive(lock);
-    wipe(&a,sizeof(a)); wipe(padded,sizeof(padded));
+    wipe(&a,sizeof(a));
     return e;
 }
 bool device_security_check_password(const char *pass) {
@@ -178,12 +173,7 @@ esp_err_t device_security_get_secret(const char *name,char *out,size_t size) {
     xSemaphoreTake(lock,portMAX_DELAY);
     esp_err_t e=ESP_FAIL; size_t len=0;
     uint8_t clear[MAX_SECRET+1]={0};
-    if(!strcmp(name,"ap_pass")) {
-        account_t a={0};
-        e=account_read(&a);
-        if(e==ESP_OK) e=crypt(false,"account",a.nonce,a.ciphertext,sizeof(a.ciphertext),clear,sizeof(clear),&len);
-        wipe(&a,sizeof(a));
-    } else if(secret_name(name)) {
+    if(secret_name(name)) {
         uint8_t blob[12+MAX_SECRET+1+16]={0};
         nvs_handle_t n;
         e=nvs_open(VAULT_NS,NVS_READONLY,&n);
