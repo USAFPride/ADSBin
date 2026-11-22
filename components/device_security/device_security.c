@@ -219,9 +219,23 @@ bool device_security_has_secret(const char *name) {
     wipe(value,sizeof(value));
     return present;
 }
+/* Quiesce hosted Wi-Fi before P4 software reset. Normal password changes
+ * do not use this path. The C6 restart still needs board verification. */
+static void quiesce_wifi(void) {
+    esp_err_t e=esp_wifi_disconnect();
+    ESP_LOGI(TAG,"Wi-Fi disconnect before restart: %s",esp_err_to_name(e));
+    e=esp_wifi_stop();
+    ESP_LOGI(TAG,"Wi-Fi stop before restart: %s",esp_err_to_name(e));
+    vTaskDelay(pdMS_TO_TICKS(500));
+    e=esp_wifi_deinit();
+    ESP_LOGI(TAG,"Wi-Fi deinit before restart: %s",esp_err_to_name(e));
+    vTaskDelay(pdMS_TO_TICKS(500));
+}
 static void restart_task(void *arg) {
     (void)arg;
+    resetting=true;
     vTaskDelay(pdMS_TO_TICKS(1200));
+    quiesce_wifi();
     esp_restart();
 }
 void device_security_schedule_restart(void) {
@@ -235,9 +249,8 @@ static void factory_reset(void) {
      * settings; RF calibration and firmware remain on that processor. */
     (void)esp_wifi_disconnect();
     esp_err_t wifi=esp_wifi_restore();
-    (void)esp_wifi_stop();
     if(wifi!=ESP_OK) ESP_LOGW(TAG,"C6 restore not confirmed: %s",esp_err_to_name(wifi));
-    vTaskDelay(pdMS_TO_TICKS(150));
+    quiesce_wifi();
     if(lock) xSemaphoreTake(lock,portMAX_DELAY);
     wipe(vault_key,sizeof(vault_key));
     esp_err_t e=nvs_flash_erase();
