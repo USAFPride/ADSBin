@@ -11,9 +11,12 @@
 #include "nvs.h"
 #include "cJSON.h"
 #include "web_ui.h"
+#include "web_auth.h"
+#include "device_security.h"
 #include "wifi_station.h"
 static const char *TAG="web_secure";
 static esp_err_t metadata(httpd_req_t *r){
+    if(!web_auth_require(r)) return ESP_OK;
     nvs_handle_t n;
     if(nvs_open("web_cfg",NVS_READONLY,&n)!=ESP_OK){
         httpd_resp_set_type(r,"application/json");
@@ -24,9 +27,9 @@ static esp_err_t metadata(httpd_req_t *r){
     cJSON *root=cJSON_CreateObject();
     cJSON_AddBoolToObject(root,"stored",true);
     cJSON_AddBoolToObject(root,"wifi_password_entry_enabled",true);
-    size_t secret_len=0;
-    if(nvs_get_str(n,"wifi_pass",NULL,&secret_len)==ESP_OK && secret_len>1)
-        cJSON_AddBoolToObject(root,"wifi_password_configured",true);
+    cJSON_AddBoolToObject(root,"wifi_password_configured",device_security_has_secret("wifi_pass"));
+    cJSON_AddBoolToObject(root,"wg_private_configured",device_security_has_secret("wg_private"));
+    cJSON_AddBoolToObject(root,"wg_psk_configured",device_security_has_secret("wg_psk"));
     for(unsigned i=0;i<sizeof(keys)/sizeof(keys[0]);i++){
         size_t size=0;
         if(nvs_get_str(n,keys[i],NULL,&size)==ESP_OK && size>0){
@@ -54,6 +57,7 @@ static bool is_ipv4(const char *s){
         a<=255 && b<=255 && c<=255 && d<=255;
 }
 static esp_err_t save(httpd_req_t *r){
+    if(!web_auth_require(r)) return ESP_OK;
     if(r->content_len<=0||r->content_len>1500)
         return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid body length");
     char body[1501]={0};
@@ -71,11 +75,11 @@ static esp_err_t save(httpd_req_t *r){
     }
     const char *keys[]={"wifi_ssid","beast_host","beast_port",
                         "wg_public","wg_endpoint","wg_ip","wg_port",
-                        "wifi_pass","beast_enabled"};
-    const size_t limits[]={32,45,5,44,128,15,5,63,1};
+                        "wifi_pass","beast_enabled","wg_private","wg_psk"};
+    const size_t limits[]={32,45,5,44,128,15,5,63,1,44,44};
     for(const cJSON *item=root->child;item;item=item->next){
         int idx=-1;
-        for(int i=0;i<9;i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=i;break;}
+        for(unsigned i=0;i<sizeof(keys)/sizeof(keys[0]);i++)if(item->string&&strcmp(item->string,keys[i])==0){idx=(int)i;break;}
         if(idx<0||!cJSON_IsString(item)||!item->valuestring||
            strlen(item->valuestring)>limits[idx]){
             cJSON_Delete(root);
@@ -86,6 +90,12 @@ static esp_err_t save(httpd_req_t *r){
             (item->valuestring[0]!='0' && item->valuestring[0]!='1'))) {
             cJSON_Delete(root);
             return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid Beast enable value");
+        }
+        if(idx==9 || idx==10 || (idx==3 && item->valuestring[0])){
+            const char *k=item->valuestring;
+            if(strlen(k)!=44 || k[43]!='=' || strspn(k,"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/")!=43){
+                cJSON_Delete(root); return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid WireGuard base64 key");
+            }
         }
         if(idx==7){
             size_t pwlen=strlen(item->valuestring);
@@ -108,7 +118,9 @@ static esp_err_t save(httpd_req_t *r){
     esp_err_t err=nvs_open("web_cfg",NVS_READWRITE,&n);
     if(err==ESP_OK){
         for(const cJSON *item=root->child;item;item=item->next){
-            err=nvs_set_str(n,item->string,item->valuestring);
+            if(!strcmp(item->string,"wifi_pass") || !strcmp(item->string,"wg_private") || !strcmp(item->string,"wg_psk"))
+                err=device_security_set_secret(item->string,item->valuestring);
+            else err=nvs_set_str(n,item->string,item->valuestring);
             if(err!=ESP_OK)break;
         }
         if(err==ESP_OK)err=nvs_commit(n);
@@ -121,6 +133,7 @@ static esp_err_t save(httpd_req_t *r){
 }
 static esp_err_t wifi_test(httpd_req_t *req)
 {
+    if(!web_auth_require(req)) return ESP_OK;
     esp_err_t err = wifi_station_request_test();
     if (err != ESP_OK)
         return httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST,
@@ -136,7 +149,7 @@ esp_err_t web_ui_http_config_register(httpd_handle_t server)
     if(err==ESP_OK)err=httpd_register_uri_handler(server,&post);
     const httpd_uri_t test={.uri="/api/wifi/test",.method=HTTP_POST,.handler=wifi_test};
     if(err==ESP_OK)err=httpd_register_uri_handler(server,&test);
-    if(err==ESP_OK)ESP_LOGW(TAG,"BENCH-ONLY HTTP config enabled; never submit secrets or expose AP to untrusted clients");
+    if(err==ESP_OK)ESP_LOGW(TAG,"Local HTTP configuration; reversible development vault, trusted networks only");
     return err;
 }
 #endif
