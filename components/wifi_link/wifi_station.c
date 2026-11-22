@@ -6,6 +6,8 @@
  * Do not use production Wi-Fi credentials on the open ADSBin AP.
  */
 #include "wifi_station.h"
+#include "device_security.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
 #include "sdkconfig.h"
@@ -27,10 +29,14 @@ static volatile bool s_reconfiguring;
 static volatile int s_rssi;
 static volatile uint32_t s_disconnects, s_last_reason, s_attempts;
 static char s_ip[16];
+static volatile bool s_credentials_ready;
+static volatile int64_t s_last_try_us;
+static volatile bool s_retry_task_started;
 
 static bool read_credentials(wifi_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
+    if (!device_security_ready() || !device_security_configured()) return false;
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
     const char *default_ssid = CONFIG_ADSBIN_REMOTE_WIFI_SSID;
     const char *default_pass = CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD;
@@ -53,8 +59,7 @@ static bool read_credentials(wifi_config_t *cfg)
             memset(cfg->sta.ssid, 0, sizeof(cfg->sta.ssid));
             memcpy(cfg->sta.ssid, ssid, strnlen(ssid, sizeof(cfg->sta.ssid)));
         }
-        size = sizeof(pass);
-        if (nvs_get_str(prefs, "wifi_pass", pass, &size) == ESP_OK && pass[0]) {
+        if (device_security_get_secret("wifi_pass", pass, sizeof(pass)) == ESP_OK && pass[0]) {
             memset(cfg->sta.password, 0, sizeof(cfg->sta.password));
             memcpy(cfg->sta.password, pass, strnlen(pass, sizeof(cfg->sta.password)));
         }
@@ -67,11 +72,9 @@ static bool read_credentials(wifi_config_t *cfg)
 
 static void try_connect(void)
 {
-    if (++s_attempts > 10) {
-        s_connecting = false;
-        ESP_LOGW(TAG, "10 connection attempts exhausted; use Test Wi-Fi to retry");
-        return;
-    }
+    if (!s_credentials_ready || device_security_reset_pending()) return;
+    s_attempts++;
+    s_last_try_us = esp_timer_get_time();
     s_connecting = true;
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
@@ -95,7 +98,7 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_last_reason = info ? info->reason : 0;
         ESP_LOGW(TAG, "STA disconnected reason=%lu, count=%lu",
                  (unsigned long)s_last_reason, (unsigned long)s_disconnects);
-        if (s_initialized && !s_reconfiguring) try_connect();
+        s_connecting = false;
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
         s_connected = false;
         s_connecting = false;
@@ -103,6 +106,7 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
         s_connected = false;
         s_ip[0] = 0;
+        s_connecting = false;
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *got = (const ip_event_got_ip_t *)data;
         if (got) snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&got->ip_info.ip));
@@ -114,6 +118,26 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
     }
 }
 
+static void retry_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        int64_t now=esp_timer_get_time();
+        if(s_initialized && s_credentials_ready && !s_connected &&
+           !s_test_running && !s_reconfiguring && !device_security_reset_pending() &&
+           now-s_last_try_us >= 15000000LL) {
+            /* A stalled DHCP/association attempt is also recoverable. */
+            if(s_connecting) { (void)esp_wifi_disconnect(); s_connecting=false; }
+            try_connect();
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+static esp_err_t start_retry_worker(void) {
+    if(s_retry_task_started) return ESP_OK;
+    if(xTaskCreatePinnedToCore(retry_worker,"wifi_retry",4096,NULL,4,NULL,1)!=pdPASS) return ESP_ERR_NO_MEM;
+    s_retry_task_started=true;
+    return ESP_OK;
+}
 static esp_err_t register_station_events(void)
 {
     if (s_initialized) return ESP_OK;
@@ -136,6 +160,8 @@ esp_err_t wifi_station_start_apsta(void)
     err = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (err != ESP_OK) return err;
     s_initialized = true;
+    err=start_retry_worker();
+    if(err!=ESP_OK) return err;
     wifi_config_t cfg;
     if (!read_credentials(&cfg)) {
         ESP_LOGI(TAG, "AP+STA ready. Save test credentials and select Test Wi-Fi.");
@@ -144,6 +170,7 @@ esp_err_t wifi_station_start_apsta(void)
     err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
     memset(&cfg, 0, sizeof(cfg));
     if (err == ESP_OK) {
+        s_credentials_ready = true;
         s_attempts = 0;
         try_connect();
     }
@@ -171,7 +198,7 @@ esp_err_t wifi_station_start(void)
     memset(&cfg, 0, sizeof(cfg));
     s_initialized = true;
     err = esp_wifi_start(); /* STA_START event may arrive; connect explicitly too. */
-    if (err == ESP_OK) { s_attempts = 0; try_connect(); }
+    if (err == ESP_OK) { s_credentials_ready=true; err=start_retry_worker(); if(err==ESP_OK) { s_attempts = 0; try_connect(); } }
     return err;
 #else
     return ESP_ERR_NOT_SUPPORTED;
@@ -194,8 +221,9 @@ static void station_test_worker(void *arg)
         esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
         memset(&cfg, 0, sizeof(cfg));
         s_reconfiguring = false;
-        if (err == ESP_OK) try_connect();
+        if (err == ESP_OK) { s_credentials_ready=true; try_connect(); }
         else {
+            s_credentials_ready=false;
             s_connecting = false;
             ESP_LOGW(TAG, "STA credentials apply failed: %s", esp_err_to_name(err));
         }
