@@ -5,6 +5,7 @@
 #include "web_auth.h"
 #include "device_security.h"
 #include "esp_netif.h"
+#include "esp_log.h"
 #include "esp_random.h"
 #include "esp_timer.h"
 #include "lwip/sockets.h"
@@ -29,15 +30,36 @@ static session_t sessions[SESSION_SLOTS];
 static unsigned invalid_attempts;
 static int64_t next_login;
 
+/* HTTPD may accept IPv4 clients on an IPv6 dual-stack socket.
+ * Normalize IPv4-mapped addresses; reject native IPv6 for this test policy. */
+static bool ipv4_endpoint(const struct sockaddr_storage *s,uint32_t *ip) {
+    if(s->ss_family==AF_INET) {
+        *ip=((const struct sockaddr_in*)s)->sin_addr.s_addr;
+        return true;
+    }
+#if LWIP_IPV6
+    if(s->ss_family==AF_INET6) {
+        const struct sockaddr_in6 *a=(const struct sockaddr_in6*)s;
+        const uint8_t *b=a->sin6_addr.s6_addr;
+        static const uint8_t prefix[12]={0,0,0,0,0,0,0,0,0,0,255,255};
+        if(memcmp(b,prefix,sizeof(prefix))==0) {
+            memcpy(ip,b+12,4);
+            return true;
+        }
+    }
+#endif
+    return false;
+}
 static bool endpoints(httpd_req_t *r,uint32_t *peer,uint32_t *local) {
     struct sockaddr_storage p={0},l={0};
     socklen_t pn=sizeof(p),ln=sizeof(l);
     int fd=httpd_req_to_sockfd(r);
     if(fd<0 || getpeername(fd,(struct sockaddr*)&p,&pn)!=0 ||
        getsockname(fd,(struct sockaddr*)&l,&ln)!=0) return false;
-    if(p.ss_family!=AF_INET || l.ss_family!=AF_INET) return false;
-    *peer=((struct sockaddr_in*)&p)->sin_addr.s_addr;
-    *local=((struct sockaddr_in*)&l)->sin_addr.s_addr;
+    if(!ipv4_endpoint(&p,peer) || !ipv4_endpoint(&l,local)) {
+        ESP_LOGW("web_auth","Rejected socket families peer=%d local=%d",(int)p.ss_family,(int)l.ss_family);
+        return false;
+    }
     return true;
 }
 static bool private_ip(uint32_t ip) {
@@ -55,7 +77,11 @@ bool web_auth_local(httpd_req_t *r,bool ap_only) {
     uint32_t peer,local;
     if(!device_security_ready() || !endpoints(r,&peer,&local)) return false;
     if(on_interface("WIFI_AP_DEF",peer,local)) return true;
-    return !ap_only && device_security_configured() && on_interface("WIFI_STA_DEF",peer,local);
+    if(!ap_only && device_security_configured() && on_interface("WIFI_STA_DEF",peer,local)) return true;
+    char p[INET_ADDRSTRLEN]={0},l[INET_ADDRSTRLEN]={0};
+    inet_ntop(AF_INET,&peer,p,sizeof(p)); inet_ntop(AF_INET,&local,l,sizeof(l));
+    ESP_LOGW("web_auth","Rejected management peer=%s local=%s AP-only=%d",p,l,ap_only);
+    return false;
 }
 void web_auth_headers(httpd_req_t *r) {
     httpd_resp_set_hdr(r,"Cache-Control","no-store");
