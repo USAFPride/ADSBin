@@ -198,14 +198,7 @@ esp_err_t wifi_link_start_ap(const wifi_link_ap_cfg_t *cfg)
     wc.ap.ssid_len       = (uint8_t)ssid_len;
     wc.ap.channel        = channel;
     wc.ap.authmode = WIFI_AUTH_OPEN;
-    if (device_security_configured()) {
-        char password[64] = {0};
-        err = device_security_get_secret("ap_pass",password,sizeof(password));
-        if (err != ESP_OK || !device_security_valid_password(password)) return ESP_FAIL;
-        memcpy(wc.ap.password,password,strlen(password));
-        memset(password,0,sizeof(password));
-        wc.ap.authmode = WIFI_AUTH_WPA2_PSK;
-    }
+    /* AP is intentionally open; HTTP administration requires authentication. */
     wc.ap.max_connection = maxconn;
 
     /* esp_wifi_set_config takes a non-const wifi_config_t* in IDF v6. */
@@ -226,7 +219,7 @@ esp_err_t wifi_link_start_ap(const wifi_link_ap_cfg_t *cfg)
     s_ap_up   = true;
     s_started = true;
     ESP_LOGI(TAG, "SoftAP up: ssid=%s ch=%u max_clients=%u secured=%d",
-             ssid, channel, maxconn, device_security_configured());
+             ssid, channel, maxconn, 0);
     return ESP_OK;
 }
 
