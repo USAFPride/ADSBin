@@ -82,8 +82,15 @@ static bool on_interface(const char *key,uint32_t peer,uint32_t local) {
      * TCP socket must still terminate at the actual configured interface IP,
      * and the client must be in that interface's private IPv4 subnet.
      * Do not authorize by Host header or permit a wildcard destination. */
+    /* Permit the explicitly trusted home management VLAN on STA only.
+     * Keep provisioning AP-only and disallow all other routed networks.
+     * This bench allowance is specific to the current installation. */
+    bool trusted_management = !strcmp(key,"WIFI_STA_DEF") &&
+        (ntohl(peer) & 0xffffff00u)==0xc0a80000u &&
+        (ntohl(local) & 0xffffff00u)==0xc0a86b00u;
     bool match=info.ip.addr==local && info.netmask.addr && private_ip(peer) && private_ip(local) &&
-        (peer & info.netmask.addr)==(local & info.netmask.addr) && peer!=info.gw.addr && peer!=local;
+        ((peer & info.netmask.addr)==(local & info.netmask.addr) || trusted_management) &&
+        peer!=info.gw.addr && peer!=local;
     if(!match) {
         char ip[INET_ADDRSTRLEN]={0},mask[INET_ADDRSTRLEN]={0},gw[INET_ADDRSTRLEN]={0};
         inet_ntop(AF_INET,&info.ip.addr,ip,sizeof(ip));
