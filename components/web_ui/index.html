@@ -53,7 +53,7 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 <div class="notice">Local HTTP only. Use a trusted network or the open ADSBin AP (no link encryption). Test vault encryption protects stored values from accidental plaintext disclosure; its key is not hardware-protected. Do not use real production credentials during this test.</div>
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
-<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="password" autocomplete="new-password" placeholder="Enter Wi-Fi password (8–63 chars)"><p id="wifiPassState" class="small">Checking password setting…</p></div>
+<div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="text" autocomplete="off" spellcheck="false" placeholder="Enter Wi-Fi password (8–63 chars)"><p id="wifiPassState" class="small">Checking password setting…</p></div>
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
 </div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
@@ -161,6 +161,11 @@ $('beastToggle').addEventListener('click',async ()=>{
  const saved=await saveSettings({beast_enabled:target},'networkSaveNotice');
  if(saved){beastEnabled=target==='1';updateBeastButton();}
 });
+let wifiPasswordSaved=false;
+const wifiPasswordMask='************';
+$('wifiPass').addEventListener('focus',()=>{if(wifiPasswordSaved && $('wifiPass').value===wifiPasswordMask){$('wifiPass').value='';$('wifiPass').type='password';}});
+$('wifiPass').addEventListener('blur',()=>{if(wifiPasswordSaved && !$('wifiPass').value){$('wifiPass').type='text';$('wifiPass').value=wifiPasswordMask;}});
+$('wifiPass').addEventListener('input',()=>{$('wifiPass').type='password';});
 async function loadSettings(){
  try{
   const resp=await fetch('/api/config',{cache:'no-store'});
@@ -172,8 +177,11 @@ async function loadSettings(){
   beastEnabled=config.beast_enabled==='1';updateBeastButton();
   const canSavePassword=true;
   $('wifiPass').disabled=!canSavePassword;
-  $('wifiPass').placeholder='Wi-Fi password (8–63 chars); blank keeps existing';
-  $('wifiPassState').textContent=(config.wifi_password_configured?'Password saved; value hidden. ':'No saved password. ')+
+  wifiPasswordSaved=!!config.wifi_password_configured;
+  $('wifiPass').type=wifiPasswordSaved?'text':'password';
+  $('wifiPass').value=wifiPasswordSaved?wifiPasswordMask:'';
+  $('wifiPass').placeholder='Wi-Fi password (8–63 chars)';
+  $('wifiPassState').textContent=(config.wifi_password_configured?'Password saved; select field to replace. ':'No saved password. ')+
     'Stored in development vault; use test credentials only.';
   $('wgPriv').placeholder=config.wg_private_configured?'Private key saved; blank keeps existing':'Base64 private key';
   $('wgPsk').placeholder=config.wg_psk_configured?'Preshared key saved; blank keeps existing':'Optional base64 preshared key';
@@ -193,7 +201,7 @@ async function saveSettings(payload,noticeId){
  }catch(e){$(noticeId).textContent='Save failed: '+e.message;return false;}
 }
 $('saveNetwork').addEventListener('click',async ()=>{
- const password=$('wifiPass').value;
+ const password=($('wifiPass').type==='text' && wifiPasswordSaved && $('wifiPass').value===wifiPasswordMask)?'':$('wifiPass').value;
  const payload={
   wifi_ssid:$('ssid').value.trim(),
   beast_host:$('beastHost').value.trim(),
