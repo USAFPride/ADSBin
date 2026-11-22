@@ -16,6 +16,8 @@
 #include <string.h>
 #include <ctype.h>
 #include <errno.h>
+#include "nvs.h"
+#include <stdlib.h>
 
 #define SESSION_SECONDS 1800LL
 #define SESSION_SLOTS 4
@@ -72,6 +74,47 @@ static bool private_ip(uint32_t ip) {
     uint32_t v=ntohl(ip);
     return (v>>24)==10 || (v>>20)==0xac1 || (v>>16)==0xc0a8;
 }
+/* One optional routed management CIDR. Empty disables routed access.
+ * Restrict entire CIDR to RFC1918, minimum /8, /12 or /16 respectively. */
+static bool parse_management_cidr(const char *value,uint32_t *network,uint32_t *mask) {
+    if(!value || !*value) return false;
+    char copy[32];
+    if(strlen(value)>=sizeof(copy)) return false;
+    strcpy(copy,value);
+    char *slash=strchr(copy,'/');
+    if(!slash) return false;
+    *slash++=0;
+    if(!*slash || strspn(slash,"0123456789")!=strlen(slash)) return false;
+    long bits=strtol(slash,NULL,10);
+    if(bits<8 || bits>32) return false;
+    struct in_addr addr;
+    if(inet_pton(AF_INET,copy,&addr)!=1 || !private_ip(addr.s_addr)) return false;
+    uint32_t v=ntohl(addr.s_addr);
+    if((v>>24==10 && bits<8) || (v>>20==0xac1 && bits<12) || (v>>16==0xc0a8 && bits<16)) return false;
+    uint32_t m=UINT32_MAX << (32-bits);
+    if((v&m)!=v) return false;
+    *network=v; *mask=m;
+    return true;
+}
+bool web_auth_valid_management_cidr(const char *value) {
+    uint32_t network,mask;
+    return value && (!*value || parse_management_cidr(value,&network,&mask));
+}
+static bool routed_management(uint32_t peer,uint32_t local) {
+    char value[32]={0};
+    size_t size=sizeof(value);
+    nvs_handle_t n;
+    if(nvs_open("web_cfg",NVS_READONLY,&n)!=ESP_OK) return false;
+    esp_err_t e=nvs_get_str(n,"mgmt_cidr",value,&size);
+    nvs_close(n);
+    /* Legacy bench allowance only for existing installations until explicitly saved.
+     * New installations also get the same narrow default on the current test VLAN. */
+    if(e==ESP_ERR_NVS_NOT_FOUND && (ntohl(local)&0xffffff00u)==0xc0a86b00u)
+        strcpy(value,"192.168.0.0/24");
+    else if(e!=ESP_OK) return false;
+    uint32_t net,mask;
+    return parse_management_cidr(value,&net,&mask) && (ntohl(peer)&mask)==net;
+}
 static bool on_interface(const char *key,uint32_t peer,uint32_t local) {
     esp_netif_t *n=esp_netif_get_handle_from_ifkey(key);
     esp_netif_ip_info_t info={0};
@@ -85,9 +128,7 @@ static bool on_interface(const char *key,uint32_t peer,uint32_t local) {
     /* Permit the explicitly trusted home management VLAN on STA only.
      * Keep provisioning AP-only and disallow all other routed networks.
      * This bench allowance is specific to the current installation. */
-    bool trusted_management = !strcmp(key,"WIFI_STA_DEF") &&
-        (ntohl(peer) & 0xffffff00u)==0xc0a80000u &&
-        (ntohl(local) & 0xffffff00u)==0xc0a86b00u;
+    bool trusted_management = !strcmp(key,"WIFI_STA_DEF") && routed_management(peer,local);
     bool match=info.ip.addr==local && info.netmask.addr && private_ip(peer) && private_ip(local) &&
         ((peer & info.netmask.addr)==(local & info.netmask.addr) || trusted_management) &&
         peer!=info.gw.addr && peer!=local;
