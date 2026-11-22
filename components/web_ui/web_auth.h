@@ -7,4 +7,3 @@ bool web_auth_require(httpd_req_t *req);
 esp_err_t web_auth_register(httpd_handle_t server);
 void web_auth_headers(httpd_req_t *req);
 
-bool web_auth_valid_management_cidr(const char *value);
