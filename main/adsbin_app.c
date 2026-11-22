@@ -80,6 +80,7 @@
 #include "wifi_station.h"
 #include "remote_beast.h"
 #include "web_ui.h"
+#include "device_security.h"
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
 #include "remote_wireguard.h"
 #endif      // open SoftAP on the on-board C6 (esp-hosted, S10)
