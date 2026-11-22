@@ -30,7 +30,8 @@ static volatile int s_rssi;
 static volatile uint32_t s_disconnects, s_last_reason, s_attempts;
 static char s_ip[16];
 static volatile bool s_credentials_ready;
-static volatile int64_t s_last_try_us;
+static volatile uint32_t s_last_try_ms;
+static volatile uint32_t s_consecutive_attempts;
 static volatile bool s_retry_task_started;
 
 static bool read_credentials(wifi_config_t *cfg)
@@ -74,7 +75,8 @@ static void try_connect(void)
 {
     if (!s_credentials_ready || device_security_reset_pending()) return;
     s_attempts++;
-    s_last_try_us = esp_timer_get_time();
+    s_last_try_ms = (uint32_t)(esp_timer_get_time()/1000);
+    if(s_consecutive_attempts<1000) s_consecutive_attempts++;
     s_connecting = true;
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
@@ -112,6 +114,7 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
         if (got) snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&got->ip_info.ip));
         s_connected = true;
         s_connecting = false;
+        s_consecutive_attempts=0;
         wifi_ap_record_t ap = {0};
         if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) s_rssi = ap.rssi;
         ESP_LOGI(TAG, "STA DHCP IPv4=%s RSSI=%d dBm", s_ip, (int)s_rssi);
@@ -121,13 +124,18 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
 static void retry_worker(void *arg) {
     (void)arg;
     for (;;) {
-        int64_t now=esp_timer_get_time();
+        uint32_t now=(uint32_t)(esp_timer_get_time()/1000);
+        uint32_t failures=s_consecutive_attempts;
+        uint32_t wait_ms=s_connecting?30000u:(failures<=1?5000u:failures<=3?15000u:failures<=6?30000u:60000u);
         if(s_initialized && s_credentials_ready && !s_connected &&
            !s_test_running && !s_reconfiguring && !device_security_reset_pending() &&
-           now-s_last_try_us >= 15000000LL) {
+           (uint32_t)(now-s_last_try_ms) >= wait_ms) {
             /* A stalled DHCP/association attempt is also recoverable. */
-            if(s_connecting) { (void)esp_wifi_disconnect(); s_connecting=false; }
-            try_connect();
+            if(s_connecting) {
+                (void)esp_wifi_disconnect(); s_connecting=false;
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            if(!s_test_running && !s_reconfiguring && !device_security_reset_pending() && !s_connected) try_connect();
         }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
@@ -171,7 +179,7 @@ esp_err_t wifi_station_start_apsta(void)
     memset(&cfg, 0, sizeof(cfg));
     if (err == ESP_OK) {
         s_credentials_ready = true;
-        s_attempts = 0;
+        s_attempts = 0; s_consecutive_attempts=0;
         try_connect();
     }
     return err;
@@ -189,6 +197,7 @@ esp_err_t wifi_station_start(void)
     if (err != ESP_OK) return err;
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     if ((err = esp_wifi_init(&init)) != ESP_OK) return err;
+    if ((err = esp_wifi_set_storage(WIFI_STORAGE_RAM)) != ESP_OK) return err;
     if ((err = esp_wifi_set_mode(WIFI_MODE_STA)) != ESP_OK) return err;
     wifi_config_t cfg;
     if (!read_credentials(&cfg)) return ESP_ERR_INVALID_ARG;
@@ -198,7 +207,7 @@ esp_err_t wifi_station_start(void)
     memset(&cfg, 0, sizeof(cfg));
     s_initialized = true;
     err = esp_wifi_start(); /* STA_START event may arrive; connect explicitly too. */
-    if (err == ESP_OK) { s_credentials_ready=true; err=start_retry_worker(); if(err==ESP_OK) { s_attempts = 0; try_connect(); } }
+    if (err == ESP_OK) { s_credentials_ready=true; err=start_retry_worker(); if(err==ESP_OK) { s_attempts = 0; s_consecutive_attempts=0; try_connect(); } }
     return err;
 #else
     return ESP_ERR_NOT_SUPPORTED;
@@ -216,7 +225,7 @@ static void station_test_worker(void *arg)
         s_connecting = true;
         s_connected = false;
         s_ip[0] = 0;
-        s_attempts = 0;
+        s_attempts = 0; s_consecutive_attempts=0;
         (void)esp_wifi_disconnect();
         esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
         memset(&cfg, 0, sizeof(cfg));
