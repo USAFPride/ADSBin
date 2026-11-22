@@ -1044,6 +1044,10 @@ esp_err_t adsbin_app_init(void)
         return err;
     }
 
+    err = device_security_init();
+    if (err != ESP_OK) ESP_LOGE(TAG, "Local security failed closed: %s", esp_err_to_name(err));
+    device_security_start_reset_button();
+
     // Ownship reference, seeded from the just-loaded config (manual lat/lon if
     // present; otherwise an invalid ref => global-CPR-only, which is fully valid).
     err = ownship_init();
