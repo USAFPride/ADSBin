@@ -354,8 +354,8 @@ static void provision_worker(void *arg) {
     (void)arg;
     wifi_config_t previous={0},candidate={0};
     bool had_previous=esp_wifi_get_config(WIFI_IF_STA,&previous)==ESP_OK;
-    snprintf((char*)candidate.sta.ssid,sizeof(candidate.sta.ssid),"%s",s_candidate_ssid);
-    snprintf((char*)candidate.sta.password,sizeof(candidate.sta.password),"%s",s_candidate_pass);
+    memcpy(candidate.sta.ssid,s_candidate_ssid,strlen(s_candidate_ssid));
+    memcpy(candidate.sta.password,s_candidate_pass,strlen(s_candidate_pass));
     candidate.sta.threshold.authmode=s_candidate_pass[0]?WIFI_AUTH_WPA2_PSK:WIFI_AUTH_OPEN;
     s_reconfiguring=true;
     s_connecting=false;
