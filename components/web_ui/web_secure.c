@@ -141,6 +141,80 @@ static esp_err_t wifi_test(httpd_req_t *req)
     httpd_resp_set_type(req, "application/json");
     return httpd_resp_sendstr(req, "{\"started\":true}");
 }
+
+static esp_err_t scan_start(httpd_req_t *r) {
+    if(!web_auth_require(r))return ESP_OK;
+    if(wifi_station_scan_request()!=ESP_OK)
+        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"Wi-Fi operation busy");
+    httpd_resp_set_type(r,"application/json");
+    return httpd_resp_sendstr(r,"{\"started\":true}");
+}
+static esp_err_t scan_results(httpd_req_t *r) {
+    if(!web_auth_require(r))return ESP_OK;
+    wifi_station_scan_t snapshot={0};
+    wifi_station_scan_snapshot(&snapshot);
+    cJSON *root=cJSON_CreateObject();
+    if(!root)return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
+    cJSON_AddBoolToObject(root,"scanning",snapshot.scanning);
+    cJSON_AddBoolToObject(root,"complete",snapshot.complete);
+    cJSON_AddNumberToObject(root,"error",(double)snapshot.error);
+    cJSON *aps=cJSON_AddArrayToObject(root,"networks");
+    for(size_t i=0;aps && i<snapshot.count;i++) {
+        const wifi_station_ap_t *ap=&snapshot.aps[i];
+        cJSON *item=cJSON_CreateObject();
+        if(!item)break;
+        cJSON_AddStringToObject(item,"ssid",ap->ssid);
+        cJSON_AddNumberToObject(item,"rssi",ap->rssi);
+        cJSON_AddNumberToObject(item,"authmode",ap->authmode);
+        cJSON_AddItemToArray(aps,item);
+    }
+    char *out=cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if(!out)return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
+    httpd_resp_set_type(r,"application/json");
+    esp_err_t e=httpd_resp_sendstr(r,out);free(out);return e;
+}
+static esp_err_t connect_start(httpd_req_t *r) {
+    if(!web_auth_require(r))return ESP_OK;
+    if(r->content_len<2 || r->content_len>256)
+        return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid body");
+    char body[257]={0};
+    int count=0;
+    while(count<r->content_len) {
+        int n=httpd_req_recv(r,body+count,r->content_len-count);
+        if(n<=0) {memset(body,0,sizeof(body));return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Incomplete body");}
+        count+=n;
+    }
+    cJSON *obj=cJSON_Parse(body);
+    memset(body,0,sizeof(body));
+    cJSON *ssid=obj?cJSON_GetObjectItemCaseSensitive(obj,"ssid"):NULL;
+    cJSON *pass=obj?cJSON_GetObjectItemCaseSensitive(obj,"password"):NULL;
+    if(!cJSON_IsString(ssid)||!cJSON_IsString(pass)||!ssid->valuestring||!pass->valuestring||
+       !ssid->valuestring[0]||strlen(ssid->valuestring)>32||strlen(pass->valuestring)>63) {
+        cJSON_Delete(obj);
+        return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid Wi-Fi credentials");
+    }
+    esp_err_t e=wifi_station_provision(ssid->valuestring,pass->valuestring);
+    cJSON_Delete(obj);
+    if(e==ESP_ERR_INVALID_ARG)return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid password length");
+    if(e!=ESP_OK)return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"Wi-Fi operation busy");
+    httpd_resp_set_type(r,"application/json");
+    return httpd_resp_sendstr(r,"{\"started\":true}");
+}
+static esp_err_t connect_results(httpd_req_t *r) {
+    if(!web_auth_require(r))return ESP_OK;
+    wifi_station_provision_t status={0};
+    wifi_station_provision_snapshot(&status);
+    cJSON *root=cJSON_CreateObject();
+    if(!root)return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
+    cJSON_AddNumberToObject(root,"state",(int)status.state);
+    cJSON_AddStringToObject(root,"message",status.message);
+    char *out=cJSON_PrintUnformatted(root);
+    cJSON_Delete(root);
+    if(!out)return httpd_resp_send_err(r,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
+    httpd_resp_set_type(r,"application/json");
+    esp_err_t e=httpd_resp_sendstr(r,out);free(out);return e;
+}
 esp_err_t web_ui_http_config_register(httpd_handle_t server)
 {
     const httpd_uri_t get={.uri="/api/config",.method=HTTP_GET,.handler=metadata};
@@ -149,6 +223,14 @@ esp_err_t web_ui_http_config_register(httpd_handle_t server)
     if(err==ESP_OK)err=httpd_register_uri_handler(server,&post);
     const httpd_uri_t test={.uri="/api/wifi/test",.method=HTTP_POST,.handler=wifi_test};
     if(err==ESP_OK)err=httpd_register_uri_handler(server,&test);
+    const httpd_uri_t scan_post={.uri="/api/wifi/scan",.method=HTTP_POST,.handler=scan_start};
+    const httpd_uri_t scan_get={.uri="/api/wifi/scan",.method=HTTP_GET,.handler=scan_results};
+    const httpd_uri_t connect_post={.uri="/api/wifi/connect",.method=HTTP_POST,.handler=connect_start};
+    const httpd_uri_t connect_get={.uri="/api/wifi/connect",.method=HTTP_GET,.handler=connect_results};
+    if(err==ESP_OK)err=httpd_register_uri_handler(server,&scan_post);
+    if(err==ESP_OK)err=httpd_register_uri_handler(server,&scan_get);
+    if(err==ESP_OK)err=httpd_register_uri_handler(server,&connect_post);
+    if(err==ESP_OK)err=httpd_register_uri_handler(server,&connect_get);
     if(err==ESP_OK)ESP_LOGW(TAG,"Local HTTP configuration; reversible development vault, trusted networks only");
     return err;
 }
