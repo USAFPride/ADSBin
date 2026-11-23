@@ -209,10 +209,10 @@ extern "C" {
 #define R820T_REG_LNA_TOP         0x0Du  /**< LNA AGC loop top voltage.          */
 #define R820T_REG_MIX_TOP         0x0Eu  /**< Mixer AGC loop top voltage.        */
 #define R820T_REG_PLL_VCO         0x10u  /**< Reference divider + VCO settings.  */
-#define R820T_REG_PLL_FRAC_LO     0x11u  /**< Sigma-delta fractional [7:0].      */
-#define R820T_REG_PLL_FRAC_HI     0x12u  /**< Sigma-delta fractional [15:8].     */
-#define R820T_REG_PLL_NINT        0x13u  /**< Integer divider Nint + frac msb.   */
-#define R820T_REG_PLL_VCO_CTRL    0x14u  /**< VCO band / divider control.        */
+#define R820T_REG_PLL_FRAC_LO     0x15u  /**< Sigma-delta fractional [7:0].      */
+#define R820T_REG_PLL_FRAC_HI     0x16u  /**< Sigma-delta fractional [15:8].     */
+#define R820T_REG_PLL_NINT        0x14u  /**< Integer divider Ni and Si.        */
+#define R820T_REG_PLL_SDM_CTRL    0x12u  /**< VCO current and SDM power control.*/
 #define R820T_REG_TF_FILTER       0x1Au  /**< Tracking-filter / PLL auto.        */
 #define R820T_REG_FILTER_GATE     0x1Bu  /**< Filter gate + tracking band.       */
 
@@ -328,6 +328,17 @@ typedef struct {
     /* ---- bulk-IN transfers (URBs) kept continuously in flight, per device ---- */
     usb_transfer_t   *urb[RTLSDR_NUM_URBS];
     volatile uint32_t urbs_inflight;     /**< How many URBs are submitted now.   */
+
+    /* Diagnostic-only callback timing, updated on the USB task. These counters
+     * are sampled/reset outside the callback every ~10 seconds. */
+    int64_t  perf_last_cb_us;
+    uint64_t perf_gap_sum_us;
+    uint64_t perf_copy_sum_us;
+    uint64_t perf_pre_submit_sum_us;
+    uint64_t perf_submit_sum_us;
+    uint32_t perf_gap_max_us;
+    uint32_t perf_copy_max_us;
+    uint32_t perf_count;
 
     /* ---- the owned IQ ring (no-split; producer = Core-0 completion) ---- */
     RingbufHandle_t  iq_ring;            /**< Allocated at init, one per slot.   */

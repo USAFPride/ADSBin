@@ -28,6 +28,7 @@
  */
 
 #include "wifi_link.h"
+#include "device_security.h"
 
 #include <string.h>
 
@@ -163,6 +164,9 @@ esp_err_t wifi_link_start_ap(const wifi_link_ap_cfg_t *cfg)
         return err;
     }
 
+    /* Never write new Wi-Fi secrets to the C6 flash. */
+    err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
+    if (err != ESP_OK || !device_security_ready()) return ESP_FAIL;
     /* Register the diagnostics handler for ALL WIFI_EVENT ids before start. */
     err = esp_event_handler_instance_register(WIFI_EVENT,
                                               ESP_EVENT_ANY_ID,
@@ -193,11 +197,13 @@ esp_err_t wifi_link_start_ap(const wifi_link_ap_cfg_t *cfg)
     memcpy(wc.ap.ssid, ssid, ssid_len);
     wc.ap.ssid_len       = (uint8_t)ssid_len;
     wc.ap.channel        = channel;
-    wc.ap.authmode       = WIFI_AUTH_OPEN;   /* OPEN AP - no password, by design. */
+    wc.ap.authmode = WIFI_AUTH_OPEN;
+    /* AP is intentionally open; HTTP administration requires authentication. */
     wc.ap.max_connection = maxconn;
 
     /* esp_wifi_set_config takes a non-const wifi_config_t* in IDF v6. */
     err = esp_wifi_set_config(WIFI_IF_AP, &wc);
+    memset(&wc,0,sizeof(wc));
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "esp_wifi_set_config(AP) failed: %s", esp_err_to_name(err));
         return err;
@@ -212,8 +218,8 @@ esp_err_t wifi_link_start_ap(const wifi_link_ap_cfg_t *cfg)
 
     s_ap_up   = true;
     s_started = true;
-    ESP_LOGI(TAG, "open SoftAP up: ssid=\"%s\" ch=%u max_clients=%u (no password)",
-             ssid, channel, maxconn);
+    ESP_LOGI(TAG, "SoftAP up: ssid=%s ch=%u max_clients=%u secured=%d",
+             ssid, channel, maxconn, 0);
     return ESP_OK;
 }
 
