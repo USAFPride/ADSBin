@@ -22,7 +22,10 @@ idf_component_register(
         uat_decode      # UAT message decoder (Core 1, weather path)
         traffic         # ICAO-keyed traffic table (Core 1)
         sinks           # output sink registry + USB-CDC/UDP transport + sinks (incl. weather)
+        remote_beast    # Remote Beast TCP feed
         wifi_link       # open SoftAP on the on-board C6 (esp-hosted, S10)
+        device_security # local authentication and physical reset
+        web_ui          # read-only status dashboard on Wi-Fi
         status          # LEDs + temperature watchdog (Core 1)
         # ── ESP-IDF components main itself touches ───────────────────────────
         esp_driver_gpio                # status LED pin (board-default convention)

@@ -12,7 +12,7 @@
 #  part of the same change set, never standalone.
 # ------------------------------------------------------------------------------
 idf_component_register(
-    SRCS         "wifi_link.c"
+    SRCS         "wifi_link.c" "wifi_station.c"
     INCLUDE_DIRS "include"
     REQUIRES
         esp_wifi
@@ -20,4 +20,5 @@ idf_component_register(
         esp_event
         nvs_flash
         esp_wifi_remote
+        device_security
 )

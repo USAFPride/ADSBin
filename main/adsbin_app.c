@@ -76,7 +76,14 @@
 #include "sink_debug.h"     // human-readable debug sink
 #include "sink_gdl90.h"     // GDL90 sink
 #include "sink_uat_weather.h" // GDL90 0x07 FIS-B weather relay sink
-#include "wifi_link.h"      // open SoftAP on the on-board C6 (esp-hosted, S10)
+#include "wifi_link.h"
+#include "wifi_station.h"
+#include "remote_beast.h"
+#include "web_ui.h"
+#include "device_security.h"
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+#include "remote_wireguard.h"
+#endif      // open SoftAP on the on-board C6 (esp-hosted, S10)
 #include "status.h"         // LEDs + temperature watchdog
 
 /// Log tag for the application core.
@@ -94,6 +101,66 @@ static const char *TAG = "adsbin";
 #define ADSBIN_UAT_DECODE_STACK    6144   /**< UAT decode glue: uat_decode_adsb(). */
 #define ADSBIN_UAT_UPLINK_STACK    4096   /**< weather glue: drain ring -> 0x07.   */
 
+/* Bench RF diagnostics: run on Core 1, never in the USB/DSP hot path.
+ * Actual input sample rate, ring drops, and I/Q range distinguish a USB
+ * throughput problem from a flatline tuner or too-strict demodulator. */
+static void rf_diag_task(void *arg)
+{
+    (void)arg;
+    usb_rtlsdr_stats_t prev_usb = {0};
+    demod1090_stats_t prev_demod = {0};
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(10000));
+        usb_rtlsdr_stats_t u = {0};
+        demod1090_stats_t d = {0};
+        if (usb_rtlsdr_get_stats(&u) != ESP_OK) continue;
+        demod1090_get_stats(&d);
+        ESP_LOGW("rf_diag",
+                 "SPS=%lu USB_blocks/10s=%llu USB_bytes/10s=%llu "
+                 "USB_drops/10s=%llu DSP_blocks/10s=%llu DSP_drops/10s=%llu "
+                 "DSP_samples/10s=%llu PRE/10s=%llu FRM/10s=%llu "
+                 "IQ_I=[%u,%u] IQ_Q=[%u,%u] IQ_pairs=%lu",
+                 (unsigned long)u.measured_sps,
+                 (unsigned long long)(u.total_blocks - prev_usb.total_blocks),
+                 (unsigned long long)(u.total_bytes - prev_usb.total_bytes),
+                 (unsigned long long)(u.overflow_drops - prev_usb.overflow_drops),
+                 (unsigned long long)(d.iq_blocks_consumed - prev_demod.iq_blocks_consumed),
+                 (unsigned long long)(d.iq_blocks_dropped - prev_demod.iq_blocks_dropped),
+                 (unsigned long long)(d.samples_processed - prev_demod.samples_processed),
+                 (unsigned long long)(d.preambles_detected - prev_demod.preambles_detected),
+                 (unsigned long long)(d.frames_emitted - prev_demod.frames_emitted),
+                 (unsigned)u.iq_min_i, (unsigned)u.iq_max_i,
+                 (unsigned)u.iq_min_q, (unsigned)u.iq_max_q,
+                 (unsigned long)u.iq_sample_pairs);
+        /* Instrumentation on the 1090 USB device only. The 12 ms threshold is
+         * above the 8.192 ms ideal spacing of 32 KiB at 2.0 MS/s. Intervals
+         * >=100 ms are reported separately, not averaged (e.g. recovery). */
+        const uint64_t completed = u.urb_completions - prev_usb.urb_completions;
+        const uint64_t gaps = u.urb_gap_count - prev_usb.urb_gap_count;
+        const uint64_t gap_us = u.urb_gap_sum_us - prev_usb.urb_gap_sum_us;
+        const uint64_t sampled = u.urb_prestats_samples - prev_usb.urb_prestats_samples;
+        const uint64_t prestats_us = u.urb_prestats_sum_us - prev_usb.urb_prestats_sum_us;
+        ESP_LOGW("usb_perf",
+                 "URB/10s=%llu USB_input_B/10s=%llu SHORT/10s=%llu "
+                 "GAP_avg_us=%llu GAP_max_seen_us=%lu GAP_over12ms/10s=%llu "
+                 "GAP_over100ms/10s=%llu PRESTATS_avg_us=%llu PRESTATS_max_seen_us=%lu "
+                 "PRESTATS_n/10s=%llu RESUBMIT_fail/10s=%llu",
+                 (unsigned long long)completed,
+                 (unsigned long long)(u.urb_input_bytes - prev_usb.urb_input_bytes),
+                 (unsigned long long)(u.urb_short_transfers - prev_usb.urb_short_transfers),
+                 (unsigned long long)(gaps ? gap_us / gaps : 0),
+                 (unsigned long)u.urb_gap_max_us,
+                 (unsigned long long)(u.urb_gap_over_12ms - prev_usb.urb_gap_over_12ms),
+                 (unsigned long long)(u.urb_gap_over_100ms - prev_usb.urb_gap_over_100ms),
+                 (unsigned long long)(sampled ? prestats_us / sampled : 0),
+                 (unsigned long)u.urb_prestats_max_us,
+                 (unsigned long long)sampled,
+                 (unsigned long long)(u.urb_submit_failures - prev_usb.urb_submit_failures));
+        prev_usb = u;
+        prev_demod = d;
+    }
+}
+
 /* ───────────────────────────────────────────────────────────────────────────
  *  Pipeline cadence / sizing knobs.
  * ─────────────────────────────────────────────────────────────────────────── */
@@ -109,6 +176,12 @@ static const char *TAG = "adsbin";
  * ─────────────────────────────────────────────────────────────────────────── */
 static adsbin_pipeline_t s_pipeline;          /**< IQ ring + frame/msg queues.     */
 static traffic_handle_t  s_traffic;           /**< Traffic table instance.         */
+
+/* Safe snapshot for read-only web telemetry; traffic owns its own lock. */
+static size_t web_ui_aircraft_count(void)
+{
+    return s_traffic ? traffic_count(s_traffic) : 0u;
+}
 static sink_transport_t  s_cdc_transport;     /**< Shared USB-CDC byte transport.  */
 static sink_transport_t  s_udp_transport;     /**< Optional UDP-broadcast transport.*/
 static sink_handle_t     s_sink_debug;        /**< Optional debug sink.            */
@@ -192,6 +265,9 @@ static void decode_task(void *arg)
             continue;
         }
 
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) || defined(CONFIG_ADSBIN_WEB_HTTP_CONFIG)
+        remote_beast_offer(&frame);
+#endif
         // (a) Hand the decoded observation to the traffic task. Bounded wait so a
         //     wedged traffic task can never back-pressure the decode loop into
         //     starving demod1090's output queue — drop-with-trace instead.
@@ -968,6 +1044,10 @@ esp_err_t adsbin_app_init(void)
         return err;
     }
 
+    err = device_security_init();
+    if (err != ESP_OK) ESP_LOGE(TAG, "Local security failed closed: %s", esp_err_to_name(err));
+    device_security_start_reset_button();
+
     // Ownship reference, seeded from the just-loaded config (manual lat/lon if
     // present; otherwise an invalid ref => global-CPR-only, which is fully valid).
     err = ownship_init();
@@ -1090,6 +1170,10 @@ esp_err_t adsbin_app_start(void)
     if (sink_map_early == ADSBIN_SINK_NONE) {
         sink_map_early = ADSBIN_SINK_DEBUG | ADSBIN_SINK_GDL90 | ADSBIN_SINK_WIFI;
     }
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+    esp_err_t station_err = wifi_station_start();
+    if (station_err != ESP_OK) ESP_LOGW(TAG, "STA start failed: %s", esp_err_to_name(station_err));
+#else
     if (sink_map_early & ADSBIN_SINK_WIFI) {
         const wifi_link_ap_cfg_t apcfg_early = {
             .ssid        = CONFIG_ADSBIN_AP_SSID,
@@ -1101,7 +1185,16 @@ esp_err_t adsbin_app_start(void)
             ESP_LOGW(TAG, "early wifi_link_start_ap failed (%s) - WiFi disabled, "
                           "wired path unaffected", esp_err_to_name(werr));
         }
+        else {
+            /* Bench AP+STA: start upstream Wi-Fi test before SDR streaming.
+             * Never stop the ADSBin setup AP; leave it as a recovery path. */
+            esp_err_t sta_err = wifi_station_start_apsta();
+            if (sta_err != ESP_OK)
+                ESP_LOGW(TAG, "AP+STA setup unavailable: %s", esp_err_to_name(sta_err));
+        }
     }
+
+#endif /* remote STA vs SoftAP */
 
     // Register the lifecycle callback that drives LIVE hotplug of the 978/weather
     // pipeline: a weather dongle plugged/pulled while running stands the path up or
@@ -1268,6 +1361,7 @@ esp_err_t adsbin_app_start(void)
      * running ForeFlight receives the same frames on UDP :4000. EVERY failure
      * here is non-fatal: WiFi is a bonus, never a precondition for decoding, so
      * we log and continue, leaving the USB-CDC path fully intact. */
+#ifndef CONFIG_ADSBIN_REMOTE_ENABLE
     if (sink_map & ADSBIN_SINK_WIFI) {
         // Stand up the open AP on the C6. SSID/channel/max-clients come from the
         // project Kconfig (menu "ADSBin"); authmode is fixed OPEN inside wifi_link
@@ -1321,6 +1415,7 @@ esp_err_t adsbin_app_start(void)
         }
     }
 
+#endif /* no GDL90 Wi-Fi broadcast in remote mode */
     // Spawn the Core-1 publisher (snapshots traffic + ownship every cycle).
     const sinks_loop_cfg_t loop_cfg = {
         .publish_interval_ms = ADSBIN_PUBLISH_INTERVAL_MS,
@@ -1328,6 +1423,17 @@ esp_err_t adsbin_app_start(void)
         .task_priority       = ADSBIN_PRIO_SINKS,
         .task_core_id        = ADSBIN_CORE_DECODE,
     };
+#ifdef CONFIG_ADSBIN_REMOTE_ENABLE
+#ifdef CONFIG_ADSBIN_REMOTE_WIREGUARD
+    esp_err_t wg_err = remote_wireguard_start();
+    if (wg_err != ESP_OK) ESP_LOGW(TAG, "WireGuard start failed: %s", esp_err_to_name(wg_err));
+#endif
+#endif
+#if defined(CONFIG_ADSBIN_REMOTE_ENABLE) || defined(CONFIG_ADSBIN_WEB_HTTP_CONFIG)
+    esp_err_t beast_err = remote_beast_start();
+    if (beast_err != ESP_OK)
+        ESP_LOGW(TAG, "Beast TCP sender start failed: %s", esp_err_to_name(beast_err));
+#endif
     err = sinks_start(&loop_cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "sinks_start failed: %s", esp_err_to_name(err));
@@ -1406,8 +1512,22 @@ esp_err_t adsbin_app_start(void)
      * the weather sink can bind to them. */
     build_978_pipeline();
 
+    BaseType_t diag_ok = xTaskCreatePinnedToCore(rf_diag_task, "adsbin_rf_diag",
+                                                 4096, NULL, ADSBIN_PRIO_STATUS,
+                                                 NULL, ADSBIN_CORE_DECODE);
+    if (diag_ok != pdPASS) {
+        ESP_LOGW(TAG, "RF diagnostic task unavailable");
+    }
+
     ESP_LOGI(TAG, "pipeline up: usb->demod(core0) -> decode/traffic/sinks(core1)%s",
              s_978_built ? " + 978 UAT/weather" : "");
+
+    /* Best-effort: the web server never gates SDR reception. It is read-only
+     * until authenticated TLS provisioning and encrypted NVS are available. */
+    esp_err_t web_err = web_ui_start(web_ui_aircraft_count);
+    if (web_err != ESP_OK) {
+        ESP_LOGW(TAG, "Web dashboard unavailable: %s", esp_err_to_name(web_err));
+    }
 
     return ESP_OK;
 }
