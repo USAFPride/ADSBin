@@ -80,6 +80,7 @@
 #include "wifi_station.h"
 #include "remote_beast.h"
 #include "web_ui.h"
+#include "device_security.h"
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
 #include "remote_wireguard.h"
 #endif      // open SoftAP on the on-board C6 (esp-hosted, S10)
@@ -1042,6 +1043,10 @@ esp_err_t adsbin_app_init(void)
         ESP_LOGE(TAG, "config_init failed: %s", esp_err_to_name(err));
         return err;
     }
+
+    err = device_security_init();
+    if (err != ESP_OK) ESP_LOGE(TAG, "Local security failed closed: %s", esp_err_to_name(err));
+    device_security_start_reset_button();
 
     // Ownship reference, seeded from the just-loaded config (manual lat/lon if
     // present; otherwise an invalid ref => global-CPR-only, which is fully valid).

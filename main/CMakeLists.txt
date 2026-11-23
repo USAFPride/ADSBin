@@ -24,6 +24,7 @@ idf_component_register(
         sinks           # output sink registry + USB-CDC/UDP transport + sinks (incl. weather)
         remote_beast    # Remote Beast TCP feed
         wifi_link       # open SoftAP on the on-board C6 (esp-hosted, S10)
+        device_security # local authentication and physical reset
         web_ui          # read-only status dashboard on Wi-Fi
         status          # LEDs + temperature watchdog (Core 1)
         # ── ESP-IDF components main itself touches ───────────────────────────

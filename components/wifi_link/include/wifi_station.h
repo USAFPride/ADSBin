@@ -24,3 +24,31 @@ typedef struct {
     uint32_t attempts;
 } wifi_station_snapshot_t;
 void wifi_station_get_snapshot(wifi_station_snapshot_t *out);
+
+/* Asynchronous network discovery and transactional station provisioning. */
+typedef struct {
+    char ssid[33];
+    int rssi;
+    uint8_t authmode;
+} wifi_station_ap_t;
+typedef struct {
+    bool scanning;
+    bool complete;
+    esp_err_t error;
+    size_t count;
+    wifi_station_ap_t aps[20];
+} wifi_station_scan_t;
+typedef enum {
+    WIFI_PROVISION_IDLE=0,
+    WIFI_PROVISION_CONNECTING,
+    WIFI_PROVISION_SAVED,
+    WIFI_PROVISION_FAILED
+} wifi_station_provision_state_t;
+typedef struct {
+    wifi_station_provision_state_t state;
+    char message[80];
+} wifi_station_provision_t;
+esp_err_t wifi_station_scan_request(void);
+void wifi_station_scan_snapshot(wifi_station_scan_t *out);
+esp_err_t wifi_station_provision(const char *ssid,const char *password);
+void wifi_station_provision_snapshot(wifi_station_provision_t *out);

@@ -3,6 +3,8 @@
  * plaintext HTTP. All reads run on networking tasks, away from the USB/DSP path.
  */
 #include "web_ui.h"
+#include "web_auth.h"
+#include "device_security.h"
 #include <stdio.h>
 #include <math.h>
 #include <stdint.h>
@@ -27,6 +29,8 @@ extern const char index_html_end[] asm("_binary_index_html_end");
 
 static esp_err_t page_get(httpd_req_t *req)
 {
+    if(!web_auth_local(req,false)) { httpd_resp_set_status(req,"403 Forbidden"); return httpd_resp_sendstr(req,"Local management only"); }
+    web_auth_headers(req);
     httpd_resp_set_type(req, "text/html; charset=utf-8");
     httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     return httpd_resp_send(req, index_html_start, (int)(index_html_end - index_html_start));
@@ -34,6 +38,7 @@ static esp_err_t page_get(httpd_req_t *req)
 
 esp_err_t web_ui_status_get(httpd_req_t *req)
 {
+    if(!web_auth_require(req)) return ESP_OK;
     usb_rtlsdr_status_t receiver = {0};
     usb_rtlsdr_stats_t usb = {0};
     demod1090_stats_t demod = {0};
@@ -65,7 +70,9 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        "\"station_connecting\":%s,\"station_ip\":\"%s\",\"station_rssi\":%d,"
        "\"wifi_attempts\":%lu,\"wifi_disconnects\":%lu,\"wifi_last_reason\":%lu,"
        "\"beast_enabled\":%s,\"beast_connected\":%s,\"beast_sent\":%lu,"
-       "\"beast_dropped\":%lu,\"beast_attempts\":%lu,\"beast_failures\":%lu}",
+       "\"beast_dropped\":%lu,\"beast_attempts\":%lu,\"beast_failures\":%lu,"
+       "\"beast_reconnects\":%lu,\"beast_discarded_offline\":%lu,"
+       "\"beast_last_send_uptime_s\":%lu,\"beast_queued\":%lu,\"beast_last_socket_error\":%d}",
        (unsigned long long)(esp_timer_get_time() / 1000000),
        (unsigned)(s_aircraft_count ? s_aircraft_count() : 0u),
        (unsigned long)usb.measured_sps,
@@ -89,7 +96,10 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
        (unsigned long)station.last_reason,
        beast.enabled ? "true" : "false", beast.connected ? "true" : "false",
        (unsigned long)beast.sent, (unsigned long)beast.dropped,
-       (unsigned long)beast.connect_attempts, (unsigned long)beast.failures);
+       (unsigned long)beast.connect_attempts, (unsigned long)beast.failures,
+       (unsigned long)beast.reconnects, (unsigned long)beast.discarded_offline,
+       (unsigned long)beast.last_send_uptime_s, (unsigned long)beast.queued,
+       beast.last_socket_error);
     if (n < 0 || (size_t)n >= sizeof(out)) {
         return httpd_resp_send_err(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Snapshot overflow");
     }
@@ -102,10 +112,13 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
 esp_err_t web_ui_start(size_t (*aircraft_count)(void))
 {
     if (s_server) return ESP_OK;
+    if (!device_security_ready()) return ESP_ERR_INVALID_STATE;
     s_aircraft_count = aircraft_count;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.stack_size = 6144;
-    config.max_uri_handlers = 8;
+    config.stack_size = 12288;
+    config.max_uri_handlers = 16;
+    config.recv_wait_timeout = 5;
+    config.send_wait_timeout = 5;
     config.lru_purge_enable = true;
     esp_err_t err = httpd_start(&s_server, &config);
     if (err != ESP_OK) {
@@ -122,10 +135,12 @@ esp_err_t web_ui_start(size_t (*aircraft_count)(void))
         ESP_LOGE(TAG, "HTTP route setup failed: %s", esp_err_to_name(err));
         return err;
     }
-    ESP_LOGI(TAG, "Read-only receiver dashboard available on HTTP port 80");
+    err=web_auth_register(s_server);
+    if(err!=ESP_OK) { httpd_stop(s_server); s_server=NULL; return err; }
+    ESP_LOGI(TAG, "Authenticated local receiver dashboard on HTTP port 80");
 #ifdef CONFIG_ADSBIN_WEB_HTTP_CONFIG
     esp_err_t secure_err=web_ui_http_config_register(s_server);
-    if(secure_err!=ESP_OK)ESP_LOGE(TAG,"HTTP bench configuration unavailable: %s",esp_err_to_name(secure_err));
+    if(secure_err!=ESP_OK) { httpd_stop(s_server); s_server=NULL; return secure_err; }
 #endif
     return ESP_OK;
 }
