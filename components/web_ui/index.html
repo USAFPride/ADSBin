@@ -248,7 +248,13 @@ connectButton.addEventListener('click',async()=>{
    }
    if(!status||status.state===1)throw Error('Connection result pending; check the dashboard.');
    $('connectWifiStatus').textContent=status.message||'Connection finished.';
-   if(status.state===2){selectedWifiOpen=false;await loadSettings();}
+   if(status.state===2){
+     selectedWifiOpen=false;
+     $('scanWifiResults').replaceChildren();
+     $('scanWifiResults').hidden=true;
+     $('scanWifiStatus').textContent='Network connected. Select Scan networks to search again.';
+     await loadSettings();
+   }
  }catch(e){$('connectWifiStatus').textContent='Connection error: '+e.message;}
  finally{connectWifiBusy=false;connectButton.disabled=false;scanButton.disabled=false;}
 });
