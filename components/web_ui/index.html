@@ -50,6 +50,14 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 </section>
 <section id="network" hidden>
 <div class="panel"><h2>Wi-Fi and Beast TCP configuration</h2>
+<div class="panel"><h2>Choose a Wi-Fi network</h2>
+<p class="small">Scan nearby networks, select one, enter its password, then select Save and Connect. The previous working network is kept if connection fails. Scanning may briefly interrupt the AP.</p>
+<button id="scanWifi" type="button">Scan networks</button>
+<p id="scanWifiStatus" class="small" role="status">Select Scan networks to discover nearby Wi-Fi.</p>
+<div id="scanWifiResults" class="panel" hidden></div>
+<p id="connectWifiStatus" class="small" role="status"></p>
+<button id="connectWifi" type="button" class="primary">Save and Connect</button>
+</div>
 <div class="notice">Local HTTP only. Use a trusted network or the open ADSBin AP (no link encryption). Test vault encryption protects stored values from accidental plaintext disclosure; its key is not hardware-protected. Do not use real production credentials during this test.</div>
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
@@ -166,6 +174,85 @@ const wifiPasswordMask='************';
 $('wifiPass').addEventListener('focus',()=>{if(wifiPasswordSaved && $('wifiPass').value===wifiPasswordMask){$('wifiPass').value='';$('wifiPass').type='password';}});
 $('wifiPass').addEventListener('blur',()=>{if(wifiPasswordSaved && !$('wifiPass').value){$('wifiPass').type='text';$('wifiPass').value=wifiPasswordMask;}});
 $('wifiPass').addEventListener('input',()=>{$('wifiPass').type='password';});
+
+let scanWifiBusy=false, connectWifiBusy=false, selectedWifiOpen=false;
+const scanButton=$('scanWifi'), connectButton=$('connectWifi');
+function scanSignal(rssi){return rssi>=-50?'Excellent':rssi>=-67?'Good':rssi>=-80?'Fair':'Weak';}
+function scanSecure(auth){return Number(auth)!==0;}
+function renderNetworks(networks){
+ const root=$('scanWifiResults');
+ root.replaceChildren();root.hidden=false;
+ if(!networks.length){root.textContent='No visible Wi-Fi networks found. You can enter an SSID manually.';return;}
+ networks.sort((a,b)=>b.rssi-a.rssi);
+ for(const ap of networks){
+   const row=document.createElement('label');
+   row.style.display='block';row.style.padding='8px';row.style.cursor='pointer';
+   const radio=document.createElement('input');radio.type='radio';radio.name='wifiSelection';radio.value=ap.ssid;
+   const description=document.createElement('span');
+   description.textContent=' '+ap.ssid+' · '+scanSignal(ap.rssi)+' ('+ap.rssi+' dBm) · '+(scanSecure(ap.authmode)?'Secured':'Open');
+   row.append(radio,description);root.append(row);
+   radio.addEventListener('change',()=>{
+     $('ssid').value=ap.ssid;
+     selectedWifiOpen=!scanSecure(ap.authmode);
+     $('wifiPass').value='';$('wifiPass').type='password';
+     $('wifiPass').placeholder=selectedWifiOpen?'Open network — leave blank':'Enter Wi-Fi password';
+     $('wifiPassState').textContent=selectedWifiOpen?'Open network selected; no Wi-Fi password required.':'Enter the password for the selected network.';
+     if(!selectedWifiOpen)$('wifiPass').focus();
+   });
+ }
+}
+scanButton.addEventListener('click',async()=>{
+ if(scanWifiBusy || connectWifiBusy)return;
+ scanWifiBusy=true;scanButton.disabled=true;
+ $('scanWifiStatus').textContent='Scanning nearby Wi-Fi networks…';
+ try{
+   const r=await fetch('/api/wifi/scan',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+   if(!r.ok)throw Error('HTTP '+r.status+' '+(await r.text()).slice(0,100));
+   let result;
+   for(let i=0;i<35;i++){
+     await new Promise(resolve=>setTimeout(resolve,500));
+     const status=await fetch('/api/wifi/scan',{cache:'no-store'});
+     if(!status.ok)throw Error('Scan result HTTP '+status.status);
+     result=await status.json();
+     if(result.complete)break;
+   }
+   if(!result||!result.complete)throw Error('Scan timed out');
+   if(result.error!==0)throw Error('Wi-Fi scan error '+result.error);
+   renderNetworks(result.networks||[]);
+   $('scanWifiStatus').textContent=(result.networks||[]).length+' networks found. Select one below.';
+ }catch(e){$('scanWifiStatus').textContent='Scan failed: '+e.message;}
+ finally{scanWifiBusy=false;scanButton.disabled=false;}
+});
+connectButton.addEventListener('click',async()=>{
+ if(scanWifiBusy||connectWifiBusy)return;
+ const ssid=$('ssid').value.trim();
+ const maskActive=wifiPasswordSaved&&$('wifiPass').type==='text'&&$('wifiPass').value===wifiPasswordMask;
+ const password=maskActive?'':$('wifiPass').value;
+ if(!ssid||ssid.length>32){$('connectWifiStatus').textContent='Enter or select a valid SSID.';return;}
+ if(maskActive){$('connectWifiStatus').textContent='Enter the Wi-Fi password to connect. Stored passwords are not revealed to the browser.';return;}
+ if(password && (password.length<8||password.length>63)){$('connectWifiStatus').textContent='Password must contain 8–63 characters.';return;}
+ if(!selectedWifiOpen && !password){$('connectWifiStatus').textContent='Enter a Wi-Fi password, or select an open network from scan results.';return;}
+ if(!confirm('Connect to '+ssid+'? The existing network will be restored if the new connection fails.'))return;
+ connectWifiBusy=true;connectButton.disabled=true;scanButton.disabled=true;
+ $('connectWifiStatus').textContent='Connecting to '+ssid+'…';
+ try{
+   const r=await fetch('/api/wifi/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ssid,password})});
+   if(!r.ok)throw Error('HTTP '+r.status+' '+(await r.text()).slice(0,100));
+   let status;
+   for(let i=0;i<65;i++){
+     await new Promise(resolve=>setTimeout(resolve,500));
+     const p=await fetch('/api/wifi/connect',{cache:'no-store'});
+     if(!p.ok)throw Error('Connection status HTTP '+p.status);
+     status=await p.json();
+     if(status.state===2||status.state===3)break;
+   }
+   if(!status||status.state===1)throw Error('Connection result pending; check the dashboard.');
+   $('connectWifiStatus').textContent=status.message||'Connection finished.';
+   if(status.state===2){selectedWifiOpen=false;await loadSettings();}
+ }catch(e){$('connectWifiStatus').textContent='Connection error: '+e.message;}
+ finally{connectWifiBusy=false;connectButton.disabled=false;scanButton.disabled=false;}
+});
+
 async function loadSettings(){
  try{
   const resp=await fetch('/api/config',{cache:'no-store'});
