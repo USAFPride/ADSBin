@@ -145,7 +145,7 @@ static esp_err_t wifi_test(httpd_req_t *req)
 static esp_err_t scan_start(httpd_req_t *r) {
     if(!web_auth_require(r))return ESP_OK;
     if(wifi_station_scan_request()!=ESP_OK)
-        return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"Wi-Fi operation busy");
+        {httpd_resp_set_status(r,"409 Conflict");return httpd_resp_sendstr(r,"Wi-Fi operation busy");}
     httpd_resp_set_type(r,"application/json");
     return httpd_resp_sendstr(r,"{\"started\":true}");
 }
@@ -197,7 +197,7 @@ static esp_err_t connect_start(httpd_req_t *r) {
     esp_err_t e=wifi_station_provision(ssid->valuestring,pass->valuestring);
     cJSON_Delete(obj);
     if(e==ESP_ERR_INVALID_ARG)return httpd_resp_send_err(r,HTTPD_400_BAD_REQUEST,"Invalid password length");
-    if(e!=ESP_OK)return httpd_resp_send_err(r,HTTPD_409_CONFLICT,"Wi-Fi operation busy");
+    if(e!=ESP_OK){httpd_resp_set_status(r,"409 Conflict");return httpd_resp_sendstr(r,"Wi-Fi operation busy");}
     httpd_resp_set_type(r,"application/json");
     return httpd_resp_sendstr(r,"{\"started\":true}");
 }
