@@ -80,7 +80,7 @@ static bool read_credentials(wifi_config_t *cfg)
         memset(pass, 0, sizeof(pass));
         nvs_close(prefs);
     }
-    cfg->sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    cfg->sta.threshold.authmode = cfg->sta.password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     return cfg->sta.ssid[0] != 0;
 }
 
@@ -375,15 +375,32 @@ static void provision_worker(void *arg) {
         }
     }
     if(e==ESP_OK) {
-        /* Commit the SSID and encrypted secret only after successful DHCP. */
+        /* Keep a rollback copy before updating the two NVS namespaces. */
+        char prior_secret[65]={0};
+        char prior_ssid[33]={0};
+        bool had_secret=device_security_get_secret("wifi_pass",prior_secret,sizeof(prior_secret))==ESP_OK;
         nvs_handle_t n;
         e=nvs_open("web_cfg",NVS_READWRITE,&n);
         if(e==ESP_OK) {
-            e=device_security_set_secret("wifi_pass",s_candidate_pass);
-            if(e==ESP_OK)e=nvs_set_str(n,"wifi_ssid",s_candidate_ssid);
+            size_t old_size=sizeof(prior_ssid);
+            bool had_ssid=nvs_get_str(n,"wifi_ssid",prior_ssid,&old_size)==ESP_OK;
+            /* Commit the SSID first. If vault update fails, restore SSID. */
+            e=nvs_set_str(n,"wifi_ssid",s_candidate_ssid);
             if(e==ESP_OK)e=nvs_commit(n);
+            if(e==ESP_OK) {
+                e=device_security_set_secret("wifi_pass",s_candidate_pass);
+                if(e!=ESP_OK) {
+                    esp_err_t rollback=had_ssid?nvs_set_str(n,"wifi_ssid",prior_ssid):nvs_erase_key(n,"wifi_ssid");
+                    if(rollback==ESP_OK)rollback=nvs_commit(n);
+                    if(rollback!=ESP_OK)ESP_LOGE(TAG,"SSID rollback failed: %s",esp_err_to_name(rollback));
+                    /* A vault write either commits or fails. Restore as an extra
+                     * precaution in case an underlying storage error occurred. */
+                    if(had_secret) (void)device_security_set_secret("wifi_pass",prior_secret);
+                }
+            }
             nvs_close(n);
         }
+        memset(prior_secret,0,sizeof(prior_secret));
     }
     if(e!=ESP_OK) {
         ESP_LOGW(TAG,"Candidate Wi-Fi failed (%s); restoring previous station",esp_err_to_name(e));
