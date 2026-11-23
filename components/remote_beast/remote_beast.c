@@ -1,4 +1,5 @@
 #include "remote_beast.h"
+#include "device_security.h"
 #include "wifi_station.h"
 #include "remote_wireguard.h"
 #include "sdkconfig.h"
@@ -26,6 +27,7 @@ static volatile int s_last_socket_error;
 static volatile bool s_connected;
 static volatile bool s_was_connected;
 static bool bench_enabled(void) {
+    if(!device_security_ready() || !device_security_configured()) return false;
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
     return true;
 #else

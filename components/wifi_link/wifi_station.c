@@ -2,10 +2,12 @@
  * USB/DSP never call this component. The SoftAP remains available as a
  * recovery path while a test station connection is attempted.
  *
- * BENCH SECURITY: NVS-stored passwords are plaintext without NVS encryption.
- * Do not use production Wi-Fi credentials on the open ADSBin AP.
+ * BENCH SECURITY: credentials use the reversible development vault; HTTP
+ * over the open AP does not protect credentials in transit.
  */
 #include "wifi_station.h"
+#include "device_security.h"
+#include "esp_timer.h"
 #include <string.h>
 #include <stdio.h>
 #include "sdkconfig.h"
@@ -17,6 +19,7 @@
 #include "nvs.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 
 static const char *TAG = "wifi_station";
 static volatile bool s_initialized;
@@ -27,10 +30,27 @@ static volatile bool s_reconfiguring;
 static volatile int s_rssi;
 static volatile uint32_t s_disconnects, s_last_reason, s_attempts;
 static char s_ip[16];
+static volatile bool s_credentials_ready;
+static volatile uint32_t s_last_try_ms;
+static volatile uint32_t s_consecutive_attempts;
+static volatile bool s_retry_task_started;
+static volatile bool s_scan_busy;
+static volatile bool s_provision_busy;
+static portMUX_TYPE s_scan_lock = portMUX_INITIALIZER_UNLOCKED;
+static wifi_station_scan_t s_scan={0};
+static wifi_station_provision_t s_provision={.state=WIFI_PROVISION_IDLE};
+static char s_candidate_ssid[33], s_candidate_pass[64];
+static void provision_status(wifi_station_provision_state_t state,const char *message) {
+    portENTER_CRITICAL(&s_scan_lock);
+    s_provision.state=state;
+    snprintf(s_provision.message,sizeof(s_provision.message),"%s",message?message:"");
+    portEXIT_CRITICAL(&s_scan_lock);
+}
 
 static bool read_credentials(wifi_config_t *cfg)
 {
     memset(cfg, 0, sizeof(*cfg));
+    if (!device_security_ready() || !device_security_configured()) return false;
 #ifdef CONFIG_ADSBIN_REMOTE_ENABLE
     const char *default_ssid = CONFIG_ADSBIN_REMOTE_WIFI_SSID;
     const char *default_pass = CONFIG_ADSBIN_REMOTE_WIFI_PASSWORD;
@@ -53,25 +73,23 @@ static bool read_credentials(wifi_config_t *cfg)
             memset(cfg->sta.ssid, 0, sizeof(cfg->sta.ssid));
             memcpy(cfg->sta.ssid, ssid, strnlen(ssid, sizeof(cfg->sta.ssid)));
         }
-        size = sizeof(pass);
-        if (nvs_get_str(prefs, "wifi_pass", pass, &size) == ESP_OK && pass[0]) {
+        if (device_security_get_secret("wifi_pass", pass, sizeof(pass)) == ESP_OK && pass[0]) {
             memset(cfg->sta.password, 0, sizeof(cfg->sta.password));
             memcpy(cfg->sta.password, pass, strnlen(pass, sizeof(cfg->sta.password)));
         }
         memset(pass, 0, sizeof(pass));
         nvs_close(prefs);
     }
-    cfg->sta.threshold.authmode = WIFI_AUTH_WPA2_PSK;
+    cfg->sta.threshold.authmode = cfg->sta.password[0] ? WIFI_AUTH_WPA2_PSK : WIFI_AUTH_OPEN;
     return cfg->sta.ssid[0] != 0;
 }
 
 static void try_connect(void)
 {
-    if (++s_attempts > 10) {
-        s_connecting = false;
-        ESP_LOGW(TAG, "10 connection attempts exhausted; use Test Wi-Fi to retry");
-        return;
-    }
+    if (!s_credentials_ready || device_security_reset_pending()) return;
+    s_attempts++;
+    s_last_try_ms = (uint32_t)(esp_timer_get_time()/1000);
+    if(s_consecutive_attempts<1000) s_consecutive_attempts++;
     s_connecting = true;
     esp_err_t err = esp_wifi_connect();
     if (err != ESP_OK) {
@@ -95,7 +113,7 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
         s_last_reason = info ? info->reason : 0;
         ESP_LOGW(TAG, "STA disconnected reason=%lu, count=%lu",
                  (unsigned long)s_last_reason, (unsigned long)s_disconnects);
-        if (s_initialized && !s_reconfiguring) try_connect();
+        s_connecting = false;
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_STOP) {
         s_connected = false;
         s_connecting = false;
@@ -103,17 +121,44 @@ static void station_event(void *arg, esp_event_base_t base, int32_t id, void *da
     } else if (base == IP_EVENT && id == IP_EVENT_STA_LOST_IP) {
         s_connected = false;
         s_ip[0] = 0;
+        s_connecting = false;
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         const ip_event_got_ip_t *got = (const ip_event_got_ip_t *)data;
         if (got) snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&got->ip_info.ip));
         s_connected = true;
         s_connecting = false;
+        s_consecutive_attempts=0;
         wifi_ap_record_t ap = {0};
         if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) s_rssi = ap.rssi;
         ESP_LOGI(TAG, "STA DHCP IPv4=%s RSSI=%d dBm", s_ip, (int)s_rssi);
     }
 }
 
+static void retry_worker(void *arg) {
+    (void)arg;
+    for (;;) {
+        uint32_t now=(uint32_t)(esp_timer_get_time()/1000);
+        uint32_t failures=s_consecutive_attempts;
+        uint32_t wait_ms=s_connecting?30000u:(failures<=1?5000u:failures<=3?15000u:failures<=6?30000u:60000u);
+        if(s_initialized && s_credentials_ready && !s_connected &&
+           !s_test_running && !s_reconfiguring && !s_scan_busy && !device_security_reset_pending() &&
+           (uint32_t)(now-s_last_try_ms) >= wait_ms) {
+            /* A stalled DHCP/association attempt is also recoverable. */
+            if(s_connecting) {
+                (void)esp_wifi_disconnect(); s_connecting=false;
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+            if(!s_test_running && !s_reconfiguring && !device_security_reset_pending() && !s_connected) try_connect();
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+static esp_err_t start_retry_worker(void) {
+    if(s_retry_task_started) return ESP_OK;
+    if(xTaskCreatePinnedToCore(retry_worker,"wifi_retry",4096,NULL,4,NULL,1)!=pdPASS) return ESP_ERR_NO_MEM;
+    s_retry_task_started=true;
+    return ESP_OK;
+}
 static esp_err_t register_station_events(void)
 {
     if (s_initialized) return ESP_OK;
@@ -136,6 +181,8 @@ esp_err_t wifi_station_start_apsta(void)
     err = esp_wifi_set_mode(WIFI_MODE_APSTA);
     if (err != ESP_OK) return err;
     s_initialized = true;
+    err=start_retry_worker();
+    if(err!=ESP_OK) return err;
     wifi_config_t cfg;
     if (!read_credentials(&cfg)) {
         ESP_LOGI(TAG, "AP+STA ready. Save test credentials and select Test Wi-Fi.");
@@ -144,7 +191,8 @@ esp_err_t wifi_station_start_apsta(void)
     err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
     memset(&cfg, 0, sizeof(cfg));
     if (err == ESP_OK) {
-        s_attempts = 0;
+        s_credentials_ready = true;
+        s_attempts = 0; s_consecutive_attempts=0;
         try_connect();
     }
     return err;
@@ -162,6 +210,7 @@ esp_err_t wifi_station_start(void)
     if (err != ESP_OK) return err;
     wifi_init_config_t init = WIFI_INIT_CONFIG_DEFAULT();
     if ((err = esp_wifi_init(&init)) != ESP_OK) return err;
+    if ((err = esp_wifi_set_storage(WIFI_STORAGE_RAM)) != ESP_OK) return err;
     if ((err = esp_wifi_set_mode(WIFI_MODE_STA)) != ESP_OK) return err;
     wifi_config_t cfg;
     if (!read_credentials(&cfg)) return ESP_ERR_INVALID_ARG;
@@ -171,7 +220,7 @@ esp_err_t wifi_station_start(void)
     memset(&cfg, 0, sizeof(cfg));
     s_initialized = true;
     err = esp_wifi_start(); /* STA_START event may arrive; connect explicitly too. */
-    if (err == ESP_OK) { s_attempts = 0; try_connect(); }
+    if (err == ESP_OK) { s_credentials_ready=true; err=start_retry_worker(); if(err==ESP_OK) { s_attempts = 0; s_consecutive_attempts=0; try_connect(); } }
     return err;
 #else
     return ESP_ERR_NOT_SUPPORTED;
@@ -189,13 +238,14 @@ static void station_test_worker(void *arg)
         s_connecting = true;
         s_connected = false;
         s_ip[0] = 0;
-        s_attempts = 0;
+        s_attempts = 0; s_consecutive_attempts=0;
         (void)esp_wifi_disconnect();
         esp_err_t err = esp_wifi_set_config(WIFI_IF_STA, &cfg);
         memset(&cfg, 0, sizeof(cfg));
         s_reconfiguring = false;
-        if (err == ESP_OK) try_connect();
+        if (err == ESP_OK) { s_credentials_ready=true; try_connect(); }
         else {
+            s_credentials_ready=false;
             s_connecting = false;
             ESP_LOGW(TAG, "STA credentials apply failed: %s", esp_err_to_name(err));
         }
@@ -231,4 +281,171 @@ void wifi_station_get_snapshot(wifi_station_snapshot_t *out)
     out->attempts = s_attempts;
     memcpy(out->ip, s_ip, sizeof(out->ip));
     out->rssi = s_rssi;
+}
+
+/* Wi-Fi scan is an asynchronous worker: never scan on an HTTP or DSP task. */
+static void scan_worker(void *arg) {
+    (void)arg;
+    wifi_station_scan_t result={0};
+    result.error=esp_wifi_scan_start(NULL,true);
+    if(result.error==ESP_OK) {
+        uint16_t count=0;
+        result.error=esp_wifi_scan_get_ap_num(&count);
+        if(result.error==ESP_OK) {
+            if(count>20)count=20;
+            wifi_ap_record_t records[20]={0};
+            result.error=esp_wifi_scan_get_ap_records(&count,records);
+            if(result.error==ESP_OK) {
+                for(uint16_t i=0;i<count;i++) {
+                    if(!records[i].ssid[0]) continue; /* hidden SSIDs can still be entered manually */
+                    bool duplicate=false;
+                    for(size_t j=0;j<result.count;j++) {
+                        if(strcmp(result.aps[j].ssid,(const char*)records[i].ssid)==0) {
+                            if(records[i].rssi>result.aps[j].rssi) {
+                                result.aps[j].rssi=records[i].rssi;
+                                result.aps[j].authmode=(uint8_t)records[i].authmode;
+                            }
+                            duplicate=true;break;
+                        }
+                    }
+                    if(duplicate)continue;
+                    wifi_station_ap_t *ap=&result.aps[result.count++];
+                    snprintf(ap->ssid,sizeof(ap->ssid),"%.*s",32,(const char*)records[i].ssid);
+                    ap->rssi=records[i].rssi;
+                    ap->authmode=(uint8_t)records[i].authmode;
+                }
+            }
+        }
+    }
+    result.complete=true;result.scanning=false;
+    portENTER_CRITICAL(&s_scan_lock);
+    s_scan=result;
+    s_scan_busy=false;
+    portEXIT_CRITICAL(&s_scan_lock);
+    ESP_LOGI(TAG,"Scan completed: %u SSIDs, result=%s",(unsigned)result.count,esp_err_to_name(result.error));
+    vTaskDelete(NULL);
+}
+esp_err_t wifi_station_scan_request(void) {
+    if(!s_initialized || s_test_running || s_reconfiguring || s_provision_busy || s_scan_busy ||
+       device_security_reset_pending())return ESP_ERR_INVALID_STATE;
+    portENTER_CRITICAL(&s_scan_lock);
+    s_scan_busy=true;
+    memset(&s_scan,0,sizeof(s_scan));s_scan.scanning=true;
+    portEXIT_CRITICAL(&s_scan_lock);
+    if(xTaskCreatePinnedToCore(scan_worker,"wifi_scan",6144,NULL,4,NULL,1)!=pdPASS) {
+        portENTER_CRITICAL(&s_scan_lock);
+        s_scan_busy=false;s_scan.scanning=false;s_scan.complete=true;s_scan.error=ESP_ERR_NO_MEM;
+        portEXIT_CRITICAL(&s_scan_lock);
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+void wifi_station_scan_snapshot(wifi_station_scan_t *out) {
+    if(!out)return;
+    portENTER_CRITICAL(&s_scan_lock);
+    *out=s_scan;
+    portEXIT_CRITICAL(&s_scan_lock);
+}
+
+/* Validate candidate on the live STA interface BEFORE committing to NVS.
+ * The AP remains open throughout, including unsuccessful attempts.
+ * The saved Wi-Fi network is restored if validation or persistence fails. */
+static void provision_worker(void *arg) {
+    (void)arg;
+    wifi_config_t previous={0},candidate={0};
+    bool had_previous=esp_wifi_get_config(WIFI_IF_STA,&previous)==ESP_OK;
+    memcpy(candidate.sta.ssid,s_candidate_ssid,strlen(s_candidate_ssid));
+    memcpy(candidate.sta.password,s_candidate_pass,strlen(s_candidate_pass));
+    candidate.sta.threshold.authmode=s_candidate_pass[0]?WIFI_AUTH_WPA2_PSK:WIFI_AUTH_OPEN;
+    s_reconfiguring=true;
+    s_connecting=false;
+    (void)esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(350));
+    esp_err_t e=esp_wifi_set_config(WIFI_IF_STA,&candidate);
+    if(e==ESP_OK) {
+        s_connected=false;s_ip[0]=0;
+        e=esp_wifi_connect();
+        if(e==ESP_OK) {
+            bool connected=false;
+            for(unsigned i=0;i<125;i++) {
+                if(s_connected) {connected=true;break;}
+                vTaskDelay(pdMS_TO_TICKS(200));
+            }
+            if(!connected)e=ESP_ERR_TIMEOUT;
+        }
+    }
+    if(e==ESP_OK) {
+        /* Keep a rollback copy before updating the two NVS namespaces. */
+        char prior_secret[65]={0};
+        char prior_ssid[33]={0};
+        bool had_secret=device_security_get_secret("wifi_pass",prior_secret,sizeof(prior_secret))==ESP_OK;
+        nvs_handle_t n;
+        e=nvs_open("web_cfg",NVS_READWRITE,&n);
+        if(e==ESP_OK) {
+            size_t old_size=sizeof(prior_ssid);
+            bool had_ssid=nvs_get_str(n,"wifi_ssid",prior_ssid,&old_size)==ESP_OK;
+            /* Commit the SSID first. If vault update fails, restore SSID. */
+            e=nvs_set_str(n,"wifi_ssid",s_candidate_ssid);
+            if(e==ESP_OK)e=nvs_commit(n);
+            if(e==ESP_OK) {
+                e=device_security_set_secret("wifi_pass",s_candidate_pass);
+                if(e!=ESP_OK) {
+                    esp_err_t rollback=had_ssid?nvs_set_str(n,"wifi_ssid",prior_ssid):nvs_erase_key(n,"wifi_ssid");
+                    if(rollback==ESP_OK)rollback=nvs_commit(n);
+                    if(rollback!=ESP_OK)ESP_LOGE(TAG,"SSID rollback failed: %s",esp_err_to_name(rollback));
+                    /* A vault write either commits or fails. Restore as an extra
+                     * precaution in case an underlying storage error occurred. */
+                    if(had_secret) (void)device_security_set_secret("wifi_pass",prior_secret);
+                }
+            }
+            nvs_close(n);
+        }
+        memset(prior_secret,0,sizeof(prior_secret));
+    }
+    if(e!=ESP_OK) {
+        ESP_LOGW(TAG,"Candidate Wi-Fi failed (%s); restoring previous station",esp_err_to_name(e));
+        (void)esp_wifi_disconnect();
+        if(had_previous) {
+            (void)esp_wifi_set_config(WIFI_IF_STA,&previous);
+            s_credentials_ready=previous.sta.ssid[0]!=0;
+            if(s_credentials_ready)(void)esp_wifi_connect();
+        } else {
+            s_credentials_ready=false;
+        }
+        provision_status(WIFI_PROVISION_FAILED,"Connection failed. Previous network restored.");
+    } else {
+        s_credentials_ready=true;s_consecutive_attempts=0;
+        provision_status(WIFI_PROVISION_SAVED,"Connected. Credentials securely saved.");
+        ESP_LOGI(TAG,"New upstream Wi-Fi verified and saved");
+    }
+    memset(&previous,0,sizeof(previous));
+    memset(&candidate,0,sizeof(candidate));
+    memset(s_candidate_pass,0,sizeof(s_candidate_pass));
+    s_reconfiguring=false;
+    s_provision_busy=false;
+    vTaskDelete(NULL);
+}
+esp_err_t wifi_station_provision(const char *ssid,const char *password) {
+    if(!ssid || !password || !ssid[0] || strlen(ssid)>32 || strlen(password)>63 ||
+       (password[0] && strlen(password)<8))return ESP_ERR_INVALID_ARG;
+    if(!s_initialized || !device_security_configured() || s_scan_busy || s_provision_busy ||
+       s_test_running || s_reconfiguring || device_security_reset_pending())
+        return ESP_ERR_INVALID_STATE;
+    s_provision_busy=true;
+    snprintf(s_candidate_ssid,sizeof(s_candidate_ssid),"%s",ssid);
+    snprintf(s_candidate_pass,sizeof(s_candidate_pass),"%s",password);
+    provision_status(WIFI_PROVISION_CONNECTING,"Connecting to selected network...");
+    if(xTaskCreatePinnedToCore(provision_worker,"wifi_provision",6144,NULL,4,NULL,1)!=pdPASS) {
+        memset(s_candidate_pass,0,sizeof(s_candidate_pass));
+        s_provision_busy=false;
+        provision_status(WIFI_PROVISION_FAILED,"Unable to start Wi-Fi provisioning.");
+        return ESP_ERR_NO_MEM;
+    }
+    return ESP_OK;
+}
+void wifi_station_provision_snapshot(wifi_station_provision_t *out) {
+    if(!out)return;
+    portENTER_CRITICAL(&s_scan_lock);
+    *out=s_provision;
+    portEXIT_CRITICAL(&s_scan_lock);
 }
