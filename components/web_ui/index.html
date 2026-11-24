@@ -24,6 +24,11 @@ input:focus{outline:2px solid #5687c3}button.primary{background:#3176bf;color:wh
 button.primary:disabled{background:#334054;cursor:not-allowed}
 .notice{border-left:3px solid #d4ad55;background:#29251d;padding:12px 16px;margin:14px 0;font-size:13px;line-height:1.6}
 pre{overflow:auto;color:#91cfbb;font-size:12px;line-height:1.6}section[hidden]{display:none}
+.aircraft-table{width:100%;border-collapse:collapse;font-size:14px}
+.aircraft-table th,.aircraft-table td{padding:10px 12px;border-bottom:1px solid #28374d;text-align:left}
+.aircraft-table th{color:#93a7c4;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.aircraft-table td:first-child{font-weight:700}
+.aircraft-table tbody tr:last-child td{border-bottom:none}
 footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!important}
 </style>
 </head>
@@ -44,6 +49,13 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 <div class="card"><div class="label">DSP drops</div><div class="value" id="dsp">—</div></div>
 <div class="card"><div class="label">Temperature</div><div class="value" id="temp">—</div></div>
 <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
+</div>
+<div class="panel"><h2>Tracked aircraft</h2>
+<p class="small">Live ADS-B traffic. Range and bearing require a configured antenna position. Fields not yet received are shown as —.</p>
+<p id="aircraftListState" class="small" role="status">Loading aircraft…</p>
+<div style="overflow-x:auto">
+<table class="aircraft-table"><thead><tr><th>Callsign</th><th>ICAO</th><th>Altitude ft</th><th>Speed kt</th><th>Track</th><th>V/S fpm</th><th>Range NM</th><th>Last seen</th><th>Details</th></tr></thead>
+<tbody id="aircraftList"><tr><td colspan="9" class="small">Waiting for aircraft…</td></tr></tbody></table></div>
 </div>
 <div class="panel"><h2>Receiver health</h2><div id="receiverHealth" class="small">Waiting for telemetry…</div></div>
 <div class="panel"><h2>Connectivity</h2><div id="connectivity" class="small">Waiting for telemetry…</div></div>
@@ -79,6 +91,19 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 </div><p id="wireguardSaveNotice" class="small"></p><button id="saveWireGuard" class="primary" type="button">Save WireGuard settings</button>
 </div></section>
 <section id="receiver" hidden>
+<div class="panel"><h2>Antenna location</h2>
+<p class="small">Enter the antenna's actual WGS-84 latitude and longitude and elevation above mean sea level. This position is used for aircraft range and bearing. Latitude and longitude persist in the established ADSBin configuration; elevation persists in NVS.</p>
+<div class="row">
+<div><label for="antennaLat">Latitude (degrees, north positive)</label><input id="antennaLat" type="number" step="any" min="-90" max="90" placeholder="42.000000"></div>
+<div><label for="antennaLon">Longitude (degrees, west negative)</label><input id="antennaLon" type="number" step="any" min="-180" max="180" placeholder="-85.000000"></div>
+<div><label for="antennaElev">Antenna elevation above MSL</label><input id="antennaElev" type="number" step="any" placeholder="Elevation"></div>
+<div><label for="antennaUnits">Elevation units</label><select id="antennaUnits"><option value="ft">Feet</option><option value="m">Meters</option></select></div>
+</div>
+<p id="antennaNotice" class="small" role="status">Loading antenna location…</p>
+<button id="saveAntenna" class="primary" type="button">Save antenna location</button>
+</div>
+<div class="panel"><h2>MLAT</h2><label style="display:flex;align-items:center;gap:12px"><input type="checkbox" id="mlatToggle" disabled style="width:auto"> Enable MLAT (unavailable)</label>
+<p id="mlatStatus" class="small">Off — accurate Beast timestamps are not yet implemented. This switch is locked until MLAT support is developed and verified.</p></div>
 <div class="panel"><h2>SDR configuration</h2><div class="row">
 <div><label>Center frequency</label><input value="1090 MHz" disabled></div>
 <div><label>Configured sample rate</label><input value="2.000 MS/s" disabled></div>
@@ -111,7 +136,7 @@ function showAuth(configured,msg='') {
 }
 function showApp(){
  authenticated=true;$('authGate').hidden=true;$('app').hidden=false;
- loadSettings();refresh();
+ loadSettings();loadAntenna();refresh();
  if(!polling)polling=setInterval(refresh,3000);
 }
 async function authState(){
@@ -329,6 +354,107 @@ $('saveWireGuard').addEventListener('click',async()=>{
  if(await saveSettings(payload,'wireguardSaveNotice')){$('wgPriv').value='';$('wgPsk').value='';await loadSettings();}
 });
 
+
+async function loadAntenna(){
+ try{
+  const r=await fetch('/api/antenna',{cache:'no-store'});
+  if(!r.ok)throw Error('HTTP '+r.status);
+  const d=await r.json();
+  $('antennaLat').value=d.latitude??'';
+  $('antennaLon').value=d.longitude??'';
+  $('antennaElev').value=d.elevation_m===undefined?'':(d.elevation_m*3.280839895).toFixed(2);
+  $('antennaUnits').value='ft';
+  $('mlatToggle').checked=false;
+  $('mlatToggle').disabled=true;
+  $('mlatStatus').textContent='Off — '+(d.mlat_status||'MLAT timestamp support is unavailable');
+  $('antennaNotice').textContent=d.configured?'Saved antenna position loaded.':'No complete antenna location saved yet.';
+ }catch(e){$('antennaNotice').textContent='Unable to load antenna location: '+e.message;}
+}
+$('antennaUnits').addEventListener('change',e=>{
+ const input=$('antennaElev');
+ const value=Number(input.value);
+ if(input.value!==''&&Number.isFinite(value))
+  input.value=(e.target.value==='m'?value/3.280839895:value*3.280839895).toFixed(2);
+});
+$('saveAntenna').addEventListener('click',async()=>{
+ const inputIds=['antennaLat','antennaLon','antennaElev'];
+ if(inputIds.some(id=>$(id).value.trim()==='')){
+  $('antennaNotice').textContent='Enter latitude, longitude and antenna elevation.';return;
+ }
+ const lat=Number($('antennaLat').value),lon=Number($('antennaLon').value),elev=Number($('antennaElev').value);
+ const meters=$('antennaUnits').value==='ft'?elev/3.280839895:elev;
+ if(![lat,lon,meters].every(Number.isFinite)||Math.abs(lat)>90||Math.abs(lon)>180||meters < -500||meters > 10000){
+  $('antennaNotice').textContent='Coordinates or elevation outside permitted range.';return;
+ }
+ $('saveAntenna').disabled=true;
+ try{
+  const r=await fetch('/api/antenna',{method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({latitude:lat,longitude:lon,elevation_m:meters,mlat_enabled:false})});
+  if(!r.ok)throw Error('HTTP '+r.status+' '+(await r.text()).slice(0,120));
+  $('antennaNotice').textContent='Antenna location saved. Aircraft range and bearing will update as positions arrive.';
+ }catch(e){$('antennaNotice').textContent='Save failed: '+e.message;}
+ finally{$('saveAntenna').disabled=false;}
+});
+let aircraftRefreshing=false;
+async function refreshAircraft(){
+ if(aircraftRefreshing)return;
+ aircraftRefreshing=true;
+ try{
+  const response=await fetch('/api/aircraft',{cache:'no-store'});
+  if(response.status===401){showAuth(true,'Session expired. Log in again.');return;}
+  if(!response.ok)throw Error('HTTP '+response.status);
+  const data=await response.json();
+  const planes=Array.isArray(data.aircraft)?data.aircraft:[];
+  planes.sort((a,b)=>(a.callsign||'').localeCompare(b.callsign||'')||a.icao.localeCompare(b.icao));
+  const tbody=$('aircraftList');
+  // Preserve expanded aircraft details across the 3-second telemetry redraw.
+  // ICAO is stable even if the aircraft's transmitted callsign changes.
+  const expanded=new Set(Array.from(tbody.querySelectorAll('tr[data-icao]'))
+   .filter(row=>row.querySelector('details')?.open)
+   .map(row=>row.dataset.icao));
+  tbody.replaceChildren();
+  if(!planes.length){
+    const row=document.createElement('tr'),cell=document.createElement('td');
+    cell.colSpan=9;cell.textContent='No aircraft currently tracked.';
+    row.append(cell);tbody.append(row);
+  }else{
+    for(const plane of planes){
+      const row=document.createElement('tr');
+      row.dataset.icao=plane.icao;
+      const fmtNum=(v,d=0)=>typeof v==='number'&&Number.isFinite(v)?v.toFixed(d):'—';
+      const cells=[
+       (plane.callsign||'').trim()||'—',plane.icao||'—',
+       fmtNum(plane.altitude_ft),fmtNum(plane.speed_kt),
+       typeof plane.track_deg==='number'?plane.track_deg+'°':'—',
+       fmtNum(plane.vertical_rate_fpm),fmtNum(plane.range_nm,1),
+       fmtNum(plane.last_seen_s,1)+'s'
+      ];
+      for(const value of cells){
+       const cell=document.createElement('td');
+       cell.textContent=value==='—s'?'—':value;
+       row.append(cell);
+      }
+      const detailTd=document.createElement('td');
+      const details=document.createElement('details');
+      details.open=expanded.has(plane.icao);
+      const summary=document.createElement('summary');
+      summary.textContent='View';details.append(summary);
+      const extra=document.createElement('div');extra.className='small';
+      const latitude=fmtNum(plane.latitude,5),longitude=fmtNum(plane.longitude,5);
+      extra.textContent='Lat/Lon: '+latitude+', '+longitude+
+        ' · Bearing: '+fmtNum(plane.bearing_deg,0)+'°'+
+        ' · Aircraft category: '+(plane.category??'—')+
+        ' · Messages: '+(plane.messages??'—')+
+        ' · Altitude type: '+(plane.altitude_ft===undefined?'—':plane.altitude_geometric?'Geometric':'Barometric');
+      details.append(extra);detailTd.append(details);row.append(detailTd);
+      tbody.append(row);
+    }
+  }
+  $('aircraftListState').textContent=String(data.total||0)+' aircraft tracked'+(data.truncated?' · showing first '+planes.length:'')+'.';
+ }catch(e){$('aircraftListState').textContent='Aircraft list unavailable: '+e.message;}
+ finally{aircraftRefreshing=false;}
+}
+
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});
@@ -338,6 +464,7 @@ async function refresh(){
   $('state').textContent=d.streaming?'Receiving':'Not streaming';
   $('state').className='state '+(d.streaming?'ok':'err');
   $('aircraft').textContent=fmt(d.aircraft);
+  if(!$('dashboard').hidden)refreshAircraft();
   $('rate').textContent=d.sample_sps? (d.sample_sps/1000000).toFixed(3):'—';
   $('drops').textContent=fmt(d.usb_drops);
   $('dsp').textContent=fmt(d.dsp_drops);
