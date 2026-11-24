@@ -1524,7 +1524,7 @@ esp_err_t adsbin_app_start(void)
 
     /* Best-effort: the web server never gates SDR reception. It is read-only
      * until authenticated TLS provisioning and encrypted NVS are available. */
-    esp_err_t web_err = web_ui_start(web_ui_aircraft_count);
+    esp_err_t web_err = web_ui_start(web_ui_aircraft_count, s_traffic);
     if (web_err != ESP_OK) {
         ESP_LOGW(TAG, "Web dashboard unavailable: %s", esp_err_to_name(web_err));
     }
