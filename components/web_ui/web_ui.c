@@ -134,7 +134,7 @@ static bool collect_aircraft(const traffic_target_t *target, void *ctx)
     item->icao=target->icao & 0x00FFFFFFu;
     item->has_callsign=target->has_callsign;
     memcpy(item->callsign,target->callsign,sizeof(item->callsign));
-    item->callsign[sizeof(item->callsign)-1]='\\0';
+    item->callsign[sizeof(item->callsign)-1]='\0';
     return list->count<WEB_AIRCRAFT_LIMIT;
 }
 static esp_err_t aircraft_get(httpd_req_t *req)
