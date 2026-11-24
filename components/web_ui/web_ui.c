@@ -364,6 +364,8 @@ esp_err_t web_ui_start(size_t (*aircraft_count)(void), traffic_handle_t traffic)
     antenna_update_reference_altitude();
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 12288;
+    /* traffic_iterate/traffic_set_ownship are Core-1-only by contract. */
+    config.core_id = 1;
     config.max_uri_handlers = 20;
     config.recv_wait_timeout = 5;
     config.send_wait_timeout = 5;
