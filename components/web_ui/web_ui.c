@@ -140,7 +140,7 @@ static bool collect_aircraft(const traffic_target_t *target, void *ctx)
 static esp_err_t aircraft_get(httpd_req_t *req)
 {
     if(!web_auth_require(req))return ESP_OK;
-    if(!s_traffic)return httpd_resp_send_err(req,HTTPD_503_SERVICE_UNAVAILABLE,"Traffic unavailable");
+    if(!s_traffic)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Traffic unavailable");
     web_aircraft_list_t *list=calloc(1,sizeof(*list));
     if(!list)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
     size_t total=traffic_count(s_traffic);
