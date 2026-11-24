@@ -6,11 +6,14 @@
 #include "web_auth.h"
 #include "device_security.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
 #include <stdint.h>
 #include "esp_http_server.h"
 #include "esp_timer.h"
 #include "esp_log.h"
+#include "cJSON.h"
+#include <string.h>
 #include "usb_rtlsdr.h"
 #include "demod1090.h"
 #include "status.h"
@@ -21,6 +24,7 @@
 static const char *TAG = "web_ui";
 static httpd_handle_t s_server = NULL;
 static size_t (*s_aircraft_count)(void) = NULL;
+static traffic_handle_t s_traffic = NULL;
 #ifdef CONFIG_ADSBIN_WEB_HTTP_CONFIG
 extern esp_err_t web_ui_http_config_register(httpd_handle_t server);
 #endif
@@ -109,11 +113,84 @@ esp_err_t web_ui_status_get(httpd_req_t *req)
     return httpd_resp_send(req, out, n);
 }
 
-esp_err_t web_ui_start(size_t (*aircraft_count)(void))
+
+/* Snapshot only lightweight identifiers. This callback executes under the
+ * traffic lock, so it must never allocate, log, or perform network I/O. */
+#define WEB_AIRCRAFT_LIMIT 64
+typedef struct {
+    uint32_t icao;
+    bool has_callsign;
+    char callsign[ADSB_CALLSIGN_LEN];
+} web_aircraft_t;
+typedef struct {
+    web_aircraft_t items[WEB_AIRCRAFT_LIMIT];
+    size_t count;
+} web_aircraft_list_t;
+static bool collect_aircraft(const traffic_target_t *target, void *ctx)
+{
+    web_aircraft_list_t *list=(web_aircraft_list_t *)ctx;
+    if(list->count>=WEB_AIRCRAFT_LIMIT) return false;
+    web_aircraft_t *item=&list->items[list->count++];
+    item->icao=target->icao & 0x00FFFFFFu;
+    item->has_callsign=target->has_callsign;
+    memcpy(item->callsign,target->callsign,sizeof(item->callsign));
+    item->callsign[sizeof(item->callsign)-1]='\\0';
+    return list->count<WEB_AIRCRAFT_LIMIT;
+}
+static esp_err_t aircraft_get(httpd_req_t *req)
+{
+    if(!web_auth_require(req))return ESP_OK;
+    if(!s_traffic)return httpd_resp_send_err(req,HTTPD_503_SERVICE_UNAVAILABLE,"Traffic unavailable");
+    web_aircraft_list_t *list=calloc(1,sizeof(*list));
+    if(!list)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");
+    size_t total=traffic_count(s_traffic);
+    esp_err_t err=traffic_iterate(s_traffic,collect_aircraft,list,NULL);
+    if(err!=ESP_OK){free(list);return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Traffic snapshot failed");}
+    cJSON *root=cJSON_CreateObject();
+    cJSON *planes=root?cJSON_AddArrayToObject(root,"aircraft"):NULL;
+    if(!planes){cJSON_Delete(root);free(list);return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"Out of memory");}
+    cJSON_AddNumberToObject(root,"total",(double)total);
+    cJSON_AddBoolToObject(root,"truncated",total>list->count);
+    for(size_t i=0;i<list->count;i++){
+        const web_aircraft_t *item=&list->items[i];
+        cJSON *entry=cJSON_CreateObject();
+        if(!entry){err=ESP_ERR_NO_MEM;break;}
+        char icao[7];
+        snprintf(icao,sizeof(icao),"%06lX",(unsigned long)item->icao);
+        cJSON_AddStringToObject(entry,"icao",icao);
+        /* The identification field originates in RF data. Accept only the
+         * expected flight-id alphabet to avoid rendering control characters. */
+        char ident[ADSB_CALLSIGN_LEN]={0};
+        if(item->has_callsign){
+            for(unsigned j=0;j<ADSB_CALLSIGN_LEN-1 && item->callsign[j];j++){
+                char c=item->callsign[j];
+                if((c>='A'&&c<='Z')||(c>='0'&&c<='9')||c==' '||c=='-')
+                    ident[j]=c;
+                else
+                    ident[j]=' ';
+            }
+        }
+        cJSON_AddStringToObject(entry,"callsign",ident);
+        cJSON_AddItemToArray(planes,entry);
+    }
+    free(list);
+    char *json=err==ESP_OK?cJSON_PrintUnformatted(root):NULL;
+    cJSON_Delete(root);
+    if(!json)return httpd_resp_send_err(req,HTTPD_500_INTERNAL_SERVER_ERROR,"JSON generation failed");
+    httpd_resp_set_type(req,"application/json; charset=utf-8");
+    httpd_resp_set_hdr(req,"Cache-Control","no-store");
+    httpd_resp_set_hdr(req,"X-Content-Type-Options","nosniff");
+    esp_err_t sent=httpd_resp_sendstr(req,json);
+    free(json);
+    return sent;
+}
+
+esp_err_t web_ui_start(size_t (*aircraft_count)(void), traffic_handle_t traffic)
 {
     if (s_server) return ESP_OK;
     if (!device_security_ready()) return ESP_ERR_INVALID_STATE;
     s_aircraft_count = aircraft_count;
+    s_traffic = traffic;
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 12288;
     config.max_uri_handlers = 16;
@@ -127,8 +204,10 @@ esp_err_t web_ui_start(size_t (*aircraft_count)(void))
     }
     const httpd_uri_t root = {.uri="/", .method=HTTP_GET, .handler=page_get};
     const httpd_uri_t api = {.uri="/api/status", .method=HTTP_GET, .handler=web_ui_status_get};
+    const httpd_uri_t aircraft = {.uri="/api/aircraft", .method=HTTP_GET, .handler=aircraft_get};
     err = httpd_register_uri_handler(s_server, &root);
     if (err == ESP_OK) err = httpd_register_uri_handler(s_server, &api);
+    if (err == ESP_OK) err = httpd_register_uri_handler(s_server, &aircraft);
     if (err != ESP_OK) {
         httpd_stop(s_server);
         s_server = NULL;
