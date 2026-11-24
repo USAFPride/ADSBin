@@ -406,7 +406,13 @@ async function refreshAircraft(){
   const data=await response.json();
   const planes=Array.isArray(data.aircraft)?data.aircraft:[];
   planes.sort((a,b)=>(a.callsign||'').localeCompare(b.callsign||'')||a.icao.localeCompare(b.icao));
-  const tbody=$('aircraftList');tbody.replaceChildren();
+  const tbody=$('aircraftList');
+  // Preserve expanded aircraft details across the 3-second telemetry redraw.
+  // ICAO is stable even if the aircraft's transmitted callsign changes.
+  const expanded=new Set(Array.from(tbody.querySelectorAll('tr[data-icao]'))
+   .filter(row=>row.querySelector('details')?.open)
+   .map(row=>row.dataset.icao));
+  tbody.replaceChildren();
   if(!planes.length){
     const row=document.createElement('tr'),cell=document.createElement('td');
     cell.colSpan=9;cell.textContent='No aircraft currently tracked.';
@@ -414,6 +420,7 @@ async function refreshAircraft(){
   }else{
     for(const plane of planes){
       const row=document.createElement('tr');
+      row.dataset.icao=plane.icao;
       const fmtNum=(v,d=0)=>typeof v==='number'&&Number.isFinite(v)?v.toFixed(d):'—';
       const cells=[
        (plane.callsign||'').trim()||'—',plane.icao||'—',
@@ -429,6 +436,7 @@ async function refreshAircraft(){
       }
       const detailTd=document.createElement('td');
       const details=document.createElement('details');
+      details.open=expanded.has(plane.icao);
       const summary=document.createElement('summary');
       summary.textContent='View';details.append(summary);
       const extra=document.createElement('div');extra.className='small';
