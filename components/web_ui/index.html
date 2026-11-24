@@ -24,6 +24,11 @@ input:focus{outline:2px solid #5687c3}button.primary{background:#3176bf;color:wh
 button.primary:disabled{background:#334054;cursor:not-allowed}
 .notice{border-left:3px solid #d4ad55;background:#29251d;padding:12px 16px;margin:14px 0;font-size:13px;line-height:1.6}
 pre{overflow:auto;color:#91cfbb;font-size:12px;line-height:1.6}section[hidden]{display:none}
+.aircraft-table{width:100%;border-collapse:collapse;font-size:14px}
+.aircraft-table th,.aircraft-table td{padding:10px 12px;border-bottom:1px solid #28374d;text-align:left}
+.aircraft-table th{color:#93a7c4;font-size:12px;letter-spacing:.06em;text-transform:uppercase}
+.aircraft-table td:first-child{font-weight:700}
+.aircraft-table tbody tr:last-child td{border-bottom:none}
 footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!important}
 </style>
 </head>
@@ -44,6 +49,12 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 <div class="card"><div class="label">DSP drops</div><div class="value" id="dsp">—</div></div>
 <div class="card"><div class="label">Temperature</div><div class="value" id="temp">—</div></div>
 <div class="card"><div class="label">Uptime</div><div class="value" id="uptime">—</div></div>
+</div>
+<div class="panel"><h2>Tracked aircraft</h2>
+<p class="small">Live ADS-B flight identification, when transmitted. ICAO is the aircraft's 24-bit hex address; a dash means no callsign received yet.</p>
+<p id="aircraftListState" class="small" role="status">Loading aircraft…</p>
+<table class="aircraft-table"><thead><tr><th>Callsign / Flight ID</th><th>ICAO hex</th></tr></thead>
+<tbody id="aircraftList"><tr><td colspan="2" class="small">Waiting for aircraft…</td></tr></tbody></table>
 </div>
 <div class="panel"><h2>Receiver health</h2><div id="receiverHealth" class="small">Waiting for telemetry…</div></div>
 <div class="panel"><h2>Connectivity</h2><div id="connectivity" class="small">Waiting for telemetry…</div></div>
@@ -329,6 +340,39 @@ $('saveWireGuard').addEventListener('click',async()=>{
  if(await saveSettings(payload,'wireguardSaveNotice')){$('wgPriv').value='';$('wgPsk').value='';await loadSettings();}
 });
 
+
+let aircraftRefreshing=false;
+async function refreshAircraft(){
+ if(aircraftRefreshing)return;
+ aircraftRefreshing=true;
+ try{
+  const response=await fetch('/api/aircraft',{cache:'no-store'});
+  if(response.status===401){showAuth(true,'Session expired. Log in again.');return;}
+  if(!response.ok)throw Error('HTTP '+response.status);
+  const data=await response.json();
+  const planes=Array.isArray(data.aircraft)?data.aircraft:[];
+  planes.sort((a,b)=>(a.callsign||'').localeCompare(b.callsign||'')||a.icao.localeCompare(b.icao));
+  const tbody=$('aircraftList');
+  tbody.replaceChildren();
+  if(!planes.length){
+    const row=document.createElement('tr'),cell=document.createElement('td');
+    cell.colSpan=2;cell.textContent='No aircraft currently tracked.';
+    row.append(cell);tbody.append(row);
+  }else{
+    for(const plane of planes){
+      const row=document.createElement('tr');
+      const id=document.createElement('td');
+      const icao=document.createElement('td');
+      id.textContent=(plane.callsign||'').trim()||'—';
+      icao.textContent=plane.icao||'—';
+      row.append(id,icao);tbody.append(row);
+    }
+  }
+  $('aircraftListState').textContent=String(data.total||0)+' aircraft tracked'+(data.truncated?' · showing first '+planes.length:'')+'.';
+ }catch(e){$('aircraftListState').textContent='Aircraft list unavailable: '+e.message;}
+ finally{aircraftRefreshing=false;}
+}
+
 async function refresh(){
  try{
   const r=await fetch('/api/status',{cache:'no-store'});
@@ -338,6 +382,7 @@ async function refresh(){
   $('state').textContent=d.streaming?'Receiving':'Not streaming';
   $('state').className='state '+(d.streaming?'ok':'err');
   $('aircraft').textContent=fmt(d.aircraft);
+  if(!$('dashboard').hidden)refreshAircraft();
   $('rate').textContent=d.sample_sps? (d.sample_sps/1000000).toFixed(3):'—';
   $('drops').textContent=fmt(d.usb_drops);
   $('dsp').textContent=fmt(d.dsp_drops);
