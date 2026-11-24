@@ -355,7 +355,6 @@ $('saveWireGuard').addEventListener('click',async()=>{
 });
 
 
-let aircraftRefreshing=false;
 async function loadAntenna(){
  try{
   const r=await fetch('/api/antenna',{cache:'no-store'});
