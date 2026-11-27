@@ -382,7 +382,8 @@ static int slice_bits(const uint16_t *m, uint32_t n, uint32_t start,
  *  Emit a candidate frame to the output queue (non-blocking, drop-on-full).
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void emit_frame(const uint8_t *data, int len_bytes, uint8_t score,
-                       uint16_t level, int64_t rx_time_us)
+                       uint16_t level, int64_t rx_time_us,
+                       uint64_t beast_ticks, bool beast_clock_valid)
 {
     /* Assemble the POD frame on the stack; it is copied by value into the queue.*/
     modes_frame_t f;
@@ -393,6 +394,8 @@ static void emit_frame(const uint8_t *data, int len_bytes, uint8_t score,
     f.preamble_score = score;
     f.signal_level   = level;
     f.rx_time_us     = rx_time_us;
+    f.beast_ticks    = beast_ticks;
+    f.beast_clock_valid = beast_clock_valid;
 
     /* Non-blocking send: on Core 0 we MUST NOT wait. A full queue means
        modes_decode is behind, so we drop and count rather than stall ingest.   */
@@ -419,7 +422,8 @@ static void emit_frame(const uint8_t *data, int len_bytes, uint8_t score,
  *  @param rate_hz      sample rate (to map a sample offset back to a timestamp)
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void process_magnitude(const uint16_t *m, uint32_t n,
-                              int64_t block_t_us, uint32_t rate_hz)
+                              int64_t block_t_us, uint32_t rate_hz,
+                              uint64_t first_pair, bool sample_clock_valid)
 {
     /* Magnitude samples spanned by a full preamble+long frame, by just the     */
     /* preamble, and by a short (56-bit) frame. Precomputed once and reused for  */
@@ -516,6 +520,11 @@ static void process_magnitude(const uint16_t *m, uint32_t n,
 
         /* Timestamp this frame: block start plus the preamble's sample offset. */
         const int64_t rx_us = block_t_us + (int64_t)((double)j * us_per_sample + 0.5);
+        /* 12 MHz Beast time from preamble sample number (not USB callback).
+         * Split division before multiplication to avoid long-uptime overflow. */
+        const uint64_t sample = first_pair + j;
+        const uint64_t beast_ticks = ((sample / rate_hz) * 12000000ULL +
+            ((sample % rate_hz) * 12000000ULL) / rate_hz) & 0xFFFFFFFFFFFFULL;
 
         /* Slice the maximum 112 bits; the DF tells us if it is really short.   */
         uint8_t data[MODES_LONG_BYTES];
@@ -536,11 +545,13 @@ static void process_magnitude(const uint16_t *m, uint32_t n,
 
             if (is_short_df) {
                 /* A genuine short frame: bytes [0..6] are the whole thing.     */
-                emit_frame(data, MODES_SHORT_BYTES, score, level, rx_us);
+                emit_frame(data, MODES_SHORT_BYTES, score, level, rx_us,
+                           beast_ticks, sample_clock_valid);
                 advance = short_span;
             } else if (got >= MODES_LONG_BITS) {
                 /* A long-format frame and we sliced all 112 bits — emit it.    */
-                emit_frame(data, MODES_LONG_BYTES, score, level, rx_us);
+                emit_frame(data, MODES_LONG_BYTES, score, level, rx_us,
+                           beast_ticks, sample_clock_valid);
                 advance = full_span;
             } else {
                 /* A long-format candidate truncated by the block tail. Its     */
@@ -595,6 +606,9 @@ static void demod_task(void *arg)
         const uint32_t n_bytes = blk->n_bytes;
         const int64_t  t_cap   = blk->t_capture_us;
         const uint32_t blk_seq = blk->seq;
+        /* Metadata must be copied before recycling the borrowed IQ ring item. */
+        const uint64_t first_pair = blk->sample_index;
+        const bool sample_clock_valid = blk->sample_clock_valid;
 
         /* Detect a sequence gap: usb_rtlsdr bumps seq monotonically, so a jump */
         /* greater than 1 means it dropped block(s) into the ring overflow.     */
@@ -636,7 +650,8 @@ static void demod_task(void *arg)
         uint32_t prof_c2 = esp_cpu_get_cycle_count();
 #endif
         if (n_samples) {
-            process_magnitude(s_ctx.mag, n_samples, t_cap, s_ctx.sample_rate_hz);
+            process_magnitude(s_ctx.mag, n_samples, t_cap, s_ctx.sample_rate_hz,
+                              first_pair, sample_clock_valid);
         }
 #if DEMOD1090_PROFILE
         uint32_t prof_c3 = esp_cpu_get_cycle_count();
