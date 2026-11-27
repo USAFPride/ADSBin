@@ -1140,6 +1140,7 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     /* If we are tearing down (global) or this device stopped streaming, stop
      * re-arming. task_run is process-global; want_stream is per-device. */
     if (!s_ctx.task_run || !d->want_stream) {
+        d->mlat_clock_invalid = true;
         d->urbs_inflight--;
         return;
     }
@@ -1800,6 +1801,7 @@ static void stop_streaming_locked(usb_rtlsdr_dev_t *d)
         return;
     }
     d->want_stream = false;
+    d->mlat_clock_invalid = true; /* An SDR restart breaks sample continuity. */
     d->do_restream = false;   /* a stop supersedes any pending light-restream */
     cancel_urbs(d);
     d->state = (d->dev) ? USB_RTLSDR_STATE_OPEN_IDLE
@@ -2182,6 +2184,7 @@ static void apply_device_config(usb_rtlsdr_dev_t *d)
     /* Re-program the resampler first (it resets the sample pipe), then the LO,
      * then gain, then the bias-tee GPIO. Order mirrors a fresh stream bring-up. */
     if (d_rate) {
+        d->mlat_clock_invalid = true; /* Resampler reset invalidates sample clock. */
         lock();
         esp_err_t err = rtl_set_sample_rate(d, d->sample_rate_sps);
         /* Re-assert the IF-NCO after a rate change so the low-IF down-convert is
