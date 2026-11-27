@@ -343,6 +343,8 @@ typedef struct {
     /* ---- the owned IQ ring (no-split; producer = Core-0 completion) ---- */
     RingbufHandle_t  iq_ring;            /**< Allocated at init, one per slot.   */
     uint32_t         block_seq;          /**< Monotonic iq_block_t.seq counter.  */
+    uint64_t         mlat_sample_index;  /**< IQ pairs consumed from USB stream.  */
+    bool             mlat_clock_invalid; /**< Latches after USB stream disruption. */
 
     /* ---- R820T2 writable-register shadow (no RMW on the chip) ---- */
     uint8_t          r82_shadow[R820T_NUM_REGS];
