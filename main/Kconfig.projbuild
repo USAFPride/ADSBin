@@ -139,6 +139,15 @@ menu "Remote ADS-B receiver (experimental)"
         range 32 1024
         default 256
         depends on ADSBIN_REMOTE_ENABLE
+    config ADSBIN_MLAT_EXPERIMENTAL
+        bool "EXPERIMENTAL Beast 12 MHz sample timestamps (unverified)"
+        default n
+        depends on ADSBIN_REMOTE_ENABLE
+        help
+            Send sample-count-derived timestamps instead of zero in Beast frames.
+            USB losses or invisible SDR FIFO overruns can invalidate the clock.
+            Keep OFF for production until timing and synchronization are tested.
+            Known USB faults latch the output clock invalid until reboot.
     config ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
         bool "ALLOW UNENCRYPTED TCP (trusted LAN testing ONLY)"
         default n
