@@ -1087,6 +1087,54 @@ static esp_err_t configure_bias_tee_locked(usb_rtlsdr_dev_t *d)
  *
  * @return true if the block was enqueued; false if dropped (ring full).
  */
+/* Split conversion prevents multiplication overflow at long uptimes. */
+#if defined(CONFIG_ADSBIN_MLAT_CALIBRATE_THROUGHPUT)
+static uint64_t mlat_cal_delta_ticks(uint64_t sample_pairs, uint32_t rate)
+{
+    return (sample_pairs / rate) * 12000000ULL
+         + ((sample_pairs % rate) * 12000000ULL) / rate;
+}
+
+/* Called only from the USB host client task, once per completed URB.
+ * Rate measurement uses all delivered IQ pairs, including ring-overflow drops.
+ * Reanchor the piecewise clock BEFORE changing the rate, so updates cannot
+ * jump backwards or forwards. This approximates wall time, NOT RF-time proof. */
+static void mlat_cal_update(usb_rtlsdr_dev_t *d, int64_t now)
+{
+    if (d->mlat_cal_window_us == 0) {
+        d->mlat_cal_window_us = now;
+        d->mlat_cal_window_sample = d->mlat_sample_index;
+        return;
+    }
+    const int64_t dt = now - d->mlat_cal_window_us;
+    if (dt < 10000000LL) return; /* Ten-second observation window. */
+    const uint64_t ds = d->mlat_sample_index - d->mlat_cal_window_sample;
+    const uint64_t observed = (ds * 1000000ULL) / (uint64_t)dt;
+    d->mlat_cal_window_us = now;
+    d->mlat_cal_window_sample = d->mlat_sample_index;
+    if (observed < 1500000ULL || observed > 2100000ULL) {
+        /* A stalled USB stream is not a legitimate clock calibration point. */
+        return;
+    }
+    uint32_t next = (uint32_t)observed;
+    if (d->mlat_cal_rate_sps != 0) {
+        const uint64_t progressed = d->mlat_sample_index - d->mlat_cal_anchor_sample;
+        d->mlat_cal_anchor_ticks += mlat_cal_delta_ticks(progressed, d->mlat_cal_rate_sps);
+        d->mlat_cal_anchor_sample = d->mlat_sample_index;
+        /* EMA alpha = 1/4; first valid observation initializes immediately. */
+        next = (uint32_t)(((uint64_t)d->mlat_cal_rate_sps * 3ULL + next) / 4ULL);
+    } else {
+        d->mlat_cal_anchor_sample = d->mlat_sample_index;
+        /* Match the raw sample-count Beast clock at the first calibration,
+         * so timestamps never jump between raw and calibrated test modes. */
+        d->mlat_cal_anchor_ticks =
+            mlat_cal_delta_ticks(d->mlat_sample_index, d->sample_rate_sps);
+    }
+    d->mlat_cal_rate_sps = next;
+    d->stats.mlat_cal_rate_sps = next;
+}
+#endif
+
 static bool push_iq_block(usb_rtlsdr_dev_t *d, const uint8_t *src, uint32_t n_bytes,
                           int64_t t_cap, uint64_t sample_index)
 {
@@ -1110,6 +1158,16 @@ static bool push_iq_block(usb_rtlsdr_dev_t *d, const uint8_t *src, uint32_t n_by
     blk->t_capture_us = t_cap;
     blk->sample_index = sample_index;
     blk->sample_clock_valid = !d->mlat_clock_invalid;
+    blk->cal_beast_ticks = 0;
+    blk->cal_rate_sps = 0;
+#if defined(CONFIG_ADSBIN_MLAT_CALIBRATE_THROUGHPUT)
+    if (d->mlat_cal_rate_sps && !d->mlat_clock_invalid) {
+        blk->cal_rate_sps = d->mlat_cal_rate_sps;
+        blk->cal_beast_ticks = d->mlat_cal_anchor_ticks +
+            mlat_cal_delta_ticks(sample_index - d->mlat_cal_anchor_sample,
+                                 d->mlat_cal_rate_sps);
+    }
+#endif
 
     /* Copy the raw IQ in right after the header (this is the borrowed buffer the
      * consumer reads, valid until it returns the item). */
@@ -1172,6 +1230,9 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         uint64_t delivered_here = 0;   /* blocks that made it into the ring.      */
         uint64_t bytes_here     = 0;   /* IQ bytes actually delivered to the ring.*/
 
+#if defined(CONFIG_ADSBIN_MLAT_CALIBRATE_THROUGHPUT)
+        mlat_cal_update(d, now);
+#endif
         while (off + 1 < len) {                       /* need at least one pair. */
             uint32_t chunk = block_bytes;
             if (off + chunk > len) {
