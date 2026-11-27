@@ -345,6 +345,12 @@ typedef struct {
     uint32_t         block_seq;          /**< Monotonic iq_block_t.seq counter.  */
     uint64_t         mlat_sample_index;  /**< IQ pairs consumed from USB stream.  */
     bool             mlat_clock_invalid; /**< Latches after USB stream disruption. */
+    /* Experimental USB-throughput-calibrated clock. Single USB task owns state. */
+    uint64_t         mlat_cal_anchor_sample;
+    uint64_t         mlat_cal_anchor_ticks;
+    uint64_t         mlat_cal_window_sample;
+    int64_t          mlat_cal_window_us;
+    uint32_t         mlat_cal_rate_sps; /**< Smoothed throughput, 0 until initial window. */
 
     /* ---- R820T2 writable-register shadow (no RMW on the chip) ---- */
     uint8_t          r82_shadow[R820T_NUM_REGS];
