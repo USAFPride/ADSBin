@@ -1087,7 +1087,8 @@ static esp_err_t configure_bias_tee_locked(usb_rtlsdr_dev_t *d)
  *
  * @return true if the block was enqueued; false if dropped (ring full).
  */
-static bool push_iq_block(usb_rtlsdr_dev_t *d, const uint8_t *src, uint32_t n_bytes, int64_t t_cap)
+static bool push_iq_block(usb_rtlsdr_dev_t *d, const uint8_t *src, uint32_t n_bytes,
+                          int64_t t_cap, uint64_t sample_index)
 {
     /* The ring slot must hold the header plus the payload contiguously so the
      * consumer can read both from one item. */
@@ -1107,6 +1108,8 @@ static bool push_iq_block(usb_rtlsdr_dev_t *d, const uint8_t *src, uint32_t n_by
     blk->n_bytes      = n_bytes;
     blk->seq          = ++d->block_seq;      /* hot-path-private monotonic seq.  */
     blk->t_capture_us = t_cap;
+    blk->sample_index = sample_index;
+    blk->sample_clock_valid = !d->mlat_clock_invalid;
 
     /* Copy the raw IQ in right after the header (this is the borrowed buffer the
      * consumer reads, valid until it returns the item). */
@@ -1175,7 +1178,11 @@ static void bulk_in_cb(usb_transfer_t *xfer)
                 chunk &= ~1u;                         /* keep whole IQ pairs.    */
                 if (chunk == 0) break;
             }
-            if (push_iq_block(d, data + off, chunk, now)) {
+            /* Advance by received IQ pairs, independently of USB callback jitter.
+             * Advance even when the demod ring is full: SDR time keeps running. */
+            const uint64_t first_pair = d->mlat_sample_index;
+            d->mlat_sample_index += chunk / 2u;
+            if (push_iq_block(d, data + off, chunk, now, first_pair)) {
                 delivered_here++;
                 bytes_here += chunk;
             } else {
@@ -1281,6 +1288,7 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     }
 
     case USB_TRANSFER_STATUS_NO_DEVICE:
+        d->mlat_clock_invalid = true;
         /* Dongle yanked — let the client DEV_GONE path handle teardown; stop
          * re-arming this URB. */
         d->urbs_inflight--;
@@ -1288,6 +1296,7 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         return;
 
     case USB_TRANSFER_STATUS_STALL:
+        d->mlat_clock_invalid = true;
         /* Endpoint stalled — the device is STILL PRESENT, the bulk pipe just
          * halted. Ask the housekeeping task for a LIGHT restream (clear the halt +
          * re-submit URBs in place) rather than a full close-and-re-enumerate: a
@@ -1305,11 +1314,14 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         return;
 
     case USB_TRANSFER_STATUS_CANCELED:
+        d->mlat_clock_invalid = true;
         /* We cancelled it during stop()/teardown. Just retire it. */
         d->urbs_inflight--;
         return;
 
     default:
+        /* Unknown number of samples lost: fail closed for the rest of this boot. */
+        d->mlat_clock_invalid = true;
         /* Transient error (timeout/overflow/error) — re-arm and keep going. */
         break;
     }
@@ -1327,6 +1339,7 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     d->perf_submit_sum_us += (uint64_t)(adsbin_now_us() - submit_start_us);
     d->perf_count++;
     if (err != ESP_OK) {
+        d->mlat_clock_invalid = true;
         lock();
         d->stats.urb_submit_failures++;
         unlock();
