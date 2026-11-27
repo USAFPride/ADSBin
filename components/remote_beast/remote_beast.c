@@ -55,8 +55,8 @@ static bool bench_enabled(void) {
 #define CONFIG_ADSBIN_REMOTE_QUEUE 256
 #endif
 /* Beast payload: escape every 0x1a; type '2' for 56-bit and '3' for 112-bit frames.
- * 48-bit timestamp is deliberately zero: ADSBin's rx_time_us is monotonic,
- * not an MLAT-qualified 12 MHz SDR timestamp. This remote feed is NOT for MLAT.
+ * Sample-derived 12 MHz timestamps are experimental and disabled by default.
+ * They are not MLAT-qualified until RF sample continuity is field-verified.
  * RSSI magnitude is not calibrated; set zero rather than fabricate it.
  */
 static size_t encode(const modes_frame_t *f, uint8_t *out, size_t cap)
@@ -65,6 +65,13 @@ static size_t encode(const modes_frame_t *f, uint8_t *out, size_t cap)
     uint8_t raw[21] = {0};
     const size_t n = 7 + f->len_bytes; // 6 timestamp bytes, 1 signal, 7/14 payload
     memcpy(raw + 7, f->data, f->len_bytes);
+#if defined(CONFIG_ADSBIN_MLAT_EXPERIMENTAL)
+    if (f->beast_clock_valid) {
+        for (unsigned i = 0; i < 6; ++i) {
+            raw[i] = (uint8_t)(f->beast_ticks >> (40u - 8u * i));
+        }
+    }
+#endif
     size_t pos = 0;
     if (cap < 2) return 0;
     out[pos++] = 0x1a;
