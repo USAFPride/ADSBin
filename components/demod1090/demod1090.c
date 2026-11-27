@@ -423,7 +423,8 @@ static void emit_frame(const uint8_t *data, int len_bytes, uint8_t score,
  * ═══════════════════════════════════════════════════════════════════════════ */
 static void process_magnitude(const uint16_t *m, uint32_t n,
                               int64_t block_t_us, uint32_t rate_hz,
-                              uint64_t first_pair, bool sample_clock_valid)
+                              uint64_t first_pair, bool sample_clock_valid,
+                              uint64_t cal_first_ticks, uint32_t cal_rate_sps)
 {
     /* Magnitude samples spanned by a full preamble+long frame, by just the     */
     /* preamble, and by a short (56-bit) frame. Precomputed once and reused for  */
@@ -523,8 +524,21 @@ static void process_magnitude(const uint16_t *m, uint32_t n,
         /* 12 MHz Beast time from preamble sample number (not USB callback).
          * Split division before multiplication to avoid long-uptime overflow. */
         const uint64_t sample = first_pair + j;
-        const uint64_t beast_ticks = ((sample / rate_hz) * 12000000ULL +
+        uint64_t beast_ticks = ((sample / rate_hz) * 12000000ULL +
             ((sample % rate_hz) * 12000000ULL) / rate_hz) & 0xFFFFFFFFFFFFULL;
+        bool clock_valid = sample_clock_valid;
+#if defined(CONFIG_ADSBIN_MLAT_CALIBRATE_THROUGHPUT)
+        /* Rate snapshot is from the exact IQ block used for decoding.
+         * Until the first 10s calibration window completes, suppress ticks. */
+        clock_valid = sample_clock_valid && cal_rate_sps != 0;
+        if (clock_valid) {
+            beast_ticks = (cal_first_ticks +
+                ((uint64_t)j * 12000000ULL) / cal_rate_sps) & 0xFFFFFFFFFFFFULL;
+        }
+#else
+        (void)cal_first_ticks;
+        (void)cal_rate_sps;
+#endif
 
         /* Slice the maximum 112 bits; the DF tells us if it is really short.   */
         uint8_t data[MODES_LONG_BYTES];
@@ -546,12 +560,12 @@ static void process_magnitude(const uint16_t *m, uint32_t n,
             if (is_short_df) {
                 /* A genuine short frame: bytes [0..6] are the whole thing.     */
                 emit_frame(data, MODES_SHORT_BYTES, score, level, rx_us,
-                           beast_ticks, sample_clock_valid);
+                           beast_ticks, clock_valid);
                 advance = short_span;
             } else if (got >= MODES_LONG_BITS) {
                 /* A long-format frame and we sliced all 112 bits — emit it.    */
                 emit_frame(data, MODES_LONG_BYTES, score, level, rx_us,
-                           beast_ticks, sample_clock_valid);
+                           beast_ticks, clock_valid);
                 advance = full_span;
             } else {
                 /* A long-format candidate truncated by the block tail. Its     */
@@ -609,6 +623,8 @@ static void demod_task(void *arg)
         /* Metadata must be copied before recycling the borrowed IQ ring item. */
         const uint64_t first_pair = blk->sample_index;
         const bool sample_clock_valid = blk->sample_clock_valid;
+        const uint64_t cal_first_ticks = blk->cal_beast_ticks;
+        const uint32_t cal_rate_sps = blk->cal_rate_sps;
 
         /* Detect a sequence gap: usb_rtlsdr bumps seq monotonically, so a jump */
         /* greater than 1 means it dropped block(s) into the ring overflow.     */
@@ -651,7 +667,8 @@ static void demod_task(void *arg)
 #endif
         if (n_samples) {
             process_magnitude(s_ctx.mag, n_samples, t_cap, s_ctx.sample_rate_hz,
-                              first_pair, sample_clock_valid);
+                              first_pair, sample_clock_valid,
+                              cal_first_ticks, cal_rate_sps);
         }
 #if DEMOD1090_PROFILE
         uint32_t prof_c3 = esp_cpu_get_cycle_count();

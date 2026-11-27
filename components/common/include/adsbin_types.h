@@ -146,6 +146,8 @@ typedef struct {
     int64_t        t_capture_us;  /**< adsbin_now_us() at the block's first sample.*/
     uint64_t       sample_index;  /**< First IQ pair index on the continuous SDR clock. */
     bool           sample_clock_valid; /**< False after a known USB stream disruption. */
+    uint64_t       cal_beast_ticks; /**< Calibrated 12 MHz tick at the first IQ pair. */
+    uint32_t       cal_rate_sps;    /**< USB-throughput-based rate snapshot, 0 if unavailable. */
 } iq_block_t;
 
 /* ═══════════════════════════════════════════════════════════════════════════

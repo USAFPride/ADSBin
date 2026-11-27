@@ -116,11 +116,12 @@ static void rf_diag_task(void *arg)
         if (usb_rtlsdr_get_stats(&u) != ESP_OK) continue;
         demod1090_get_stats(&d);
         ESP_LOGW("rf_diag",
-                 "SPS=%lu USB_blocks/10s=%llu USB_bytes/10s=%llu "
+                 "SPS=%lu CAL_SPS=%lu USB_blocks/10s=%llu USB_bytes/10s=%llu "
                  "USB_drops/10s=%llu DSP_blocks/10s=%llu DSP_drops/10s=%llu "
                  "DSP_samples/10s=%llu PRE/10s=%llu FRM/10s=%llu "
                  "IQ_I=[%u,%u] IQ_Q=[%u,%u] IQ_pairs=%lu",
                  (unsigned long)u.measured_sps,
+                 (unsigned long)u.mlat_cal_rate_sps,
                  (unsigned long long)(u.total_blocks - prev_usb.total_blocks),
                  (unsigned long long)(u.total_bytes - prev_usb.total_bytes),
                  (unsigned long long)(u.overflow_drops - prev_usb.overflow_drops),

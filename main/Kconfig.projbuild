@@ -148,6 +148,17 @@ menu "Remote ADS-B receiver (experimental)"
             USB losses or invisible SDR FIFO overruns can invalidate the clock.
             Keep OFF for production until timing and synchronization are tested.
             Known USB faults latch the output clock invalid until reboot.
+    config ADSBIN_MLAT_CALIBRATE_THROUGHPUT
+        bool "EXPERIMENTAL adapt Beast clock to measured USB throughput"
+        default n
+        depends on ADSBIN_MLAT_EXPERIMENTAL
+        help
+            Estimate the effective USB IQ-pair delivery rate over 10-second
+            windows and smooth it for 12 MHz Beast timestamps. The output
+            is zero until the first valid window. Rate changes preserve
+            timestamp continuity. WARNING: USB throughput is not the SDR
+            hardware sample clock. Missing RF samples can create hidden
+            timestamp errors, so this is diagnostic only, not MLAT-qualified.
     config ADSBIN_REMOTE_ALLOW_UNENCRYPTED_LAN
         bool "ALLOW UNENCRYPTED TCP (trusted LAN testing ONLY)"
         default n
