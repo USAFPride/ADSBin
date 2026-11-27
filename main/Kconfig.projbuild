@@ -142,7 +142,7 @@ menu "Remote ADS-B receiver (experimental)"
     config ADSBIN_MLAT_EXPERIMENTAL
         bool "EXPERIMENTAL Beast 12 MHz sample timestamps (unverified)"
         default n
-        depends on ADSBIN_REMOTE_ENABLE
+        depends on ADSBIN_REMOTE_ENABLE || ADSBIN_WEB_HTTP_CONFIG
         help
             Send sample-count-derived timestamps instead of zero in Beast frames.
             USB losses or invisible SDR FIFO overruns can invalidate the clock.
