@@ -144,6 +144,8 @@ typedef struct {
     uint32_t       n_bytes;       /**< Length of @c samples in bytes (2 * pairs). */
     uint32_t       seq;           /**< Monotonic block counter; gaps => overflow. */
     int64_t        t_capture_us;  /**< adsbin_now_us() at the block's first sample.*/
+    uint64_t       sample_index;  /**< First IQ pair index on the continuous SDR clock. */
+    bool           sample_clock_valid; /**< False after a known USB stream disruption. */
 } iq_block_t;
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -168,6 +170,8 @@ typedef struct {
     uint8_t  preamble_score;         /**< Preamble correlation quality 0..255.  */
     uint16_t signal_level;           /**< Relative burst magnitude (proxy RSSI).*/
     int64_t  rx_time_us;             /**< Capture time, carried from iq_block.   */
+    uint64_t beast_ticks;            /**< Sample-derived 12 MHz preamble timestamp. */
+    bool     beast_clock_valid;      /**< False if an SDR stream gap was detected. */
 } modes_frame_t;
 
 /* ═══════════════════════════════════════════════════════════════════════════
