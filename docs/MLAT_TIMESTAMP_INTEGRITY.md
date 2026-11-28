@@ -56,3 +56,24 @@ Record USB URB sequence, short transfer, scheduler gap distribution, IQ FIFO/RTL
 2. Repair the **experimental-only** bridge's connection handling before another overnight test.
 3. Add optional diagnostic counters / trace sampling on this branch; avoid modifying decoder behavior or timestamps until source-level evidence identifies the cause.
 4. Design a simultaneous common-RF comparison against a known-good receiver. Do not use Wi-Fi TCP arrival times as RF ground truth.
+
+## USB transfer-pipeline instrumented build (PR #22)
+
+The source implementation keeps the existing single-submitted-URB behavior, IQ ring handling, adaptive MLAT clock, and Beast forwarding unchanged. An optional trace line is emitted once per existing 10-second `usb_cbtime` report:
+
+```
+usb_pipeline: slot=0 active_min=1 active_max=1 wait_avg_us=... wait_max_us=... wait_n=... callback_avg_us=... callback_max_us=... callback_n=... full=... short=... status_other=...
+```
+
+Definitions:
+
+- `active_min/max`: number of submitted USB URBs observed at callback entry. An allocated pool of 8 does **not** mean 8 were submitted; `submit_urbs()` currently submits just 1.
+- `wait_avg/max_us`: wall-clock delay from successful transfer submit returning to the next USB completion callback entry. Includes USB fill time, host controller servicing, task scheduling; not an RF timestamp.
+- `callback_avg/max_us`: callback entry until the current transfer's resubmit call returns; includes the existing IQ copy, statistics lock, and submit overhead.
+- `full/short`: number of completed URBs matching/falling below the configured transfer size during this 10-second interval.
+- `status_other`: completion statuses outside COMPLETED, NO_DEVICE, STALL, CANCELED.
+- The sum of wait and callback times should approximately match the existing callback-entry spacing in normal, single-URB continuous operation; differing sample counts, first intervals and scheduling may cause small discrepancies.
+
+**Testing**: Build on Windows in ESP-IDF v6.0.3 on a clean copy of this diagnostic branch, check `CONFIG_ADSBIN_MLAT_EXPERIMENTAL` and `CONFIG_ADSBIN_MLAT_CALIBRATE_THROUGHPUT` explicitly, flash on COM5 without erasing NVS, and collect 2 minutes of `usb_pipeline`, `usb_cbtime`, `usb_perf`, `rf_diag` counters. The firmware adds no changes to the SDR sample rate, URB count, stream callbacks, time conversion, or MLAT enablement settings. An ESP reboot/flash interrupts experimental feeding; do not interrupt a valuable ongoing measurement.
+
+**Limits**: These counters can locate host-side delays or underutilization but cannot, by themselves, prove whether the RTL2832U lost IQ samples internally. No instrumented build has yet been compiled/flashed/tested on the board.
