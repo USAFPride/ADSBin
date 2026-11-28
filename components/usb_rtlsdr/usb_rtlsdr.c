@@ -1205,6 +1205,22 @@ static void bulk_in_cb(usb_transfer_t *xfer)
 
     int64_t now = adsbin_now_us();
 
+    /* Host-side pipeline observability only: submit-return -> callback-entry
+     * includes HCD/USB service, host scheduling, and ISR-to-task delay.
+     * This is NOT the RF sampling time and must not calibrate Beast ticks. */
+    if (d->pipe_last_submit_end_us > 0 && now >= d->pipe_last_submit_end_us) {
+        uint64_t wait_us = (uint64_t)(now - d->pipe_last_submit_end_us);
+        d->pipe_wait_sum_us += wait_us;
+        if (wait_us > d->pipe_wait_max_us)
+            d->pipe_wait_max_us = wait_us > UINT32_MAX ? UINT32_MAX : (uint32_t)wait_us;
+        d->pipe_wait_count++;
+    }
+    d->pipe_last_submit_end_us = 0;
+    uint32_t active = d->urbs_inflight;
+    if (d->pipe_inflight_samples++ == 0 || active < d->pipe_inflight_min)
+        d->pipe_inflight_min = active;
+    if (active > d->pipe_inflight_max) d->pipe_inflight_max = active;
+
     /* Entry-to-entry gap includes USB/DWC scheduling and host task latency. */
     if (d->perf_last_cb_us > 0 && now > d->perf_last_cb_us) {
         uint64_t gap = (uint64_t)(now - d->perf_last_cb_us);
@@ -1220,6 +1236,8 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     case USB_TRANSFER_STATUS_COMPLETED: {
         const uint8_t *data = xfer->data_buffer;
         uint32_t       len  = (uint32_t)xfer->actual_num_bytes;
+        if (len == xfer->num_bytes) d->pipe_full_urb_count++;
+        else d->pipe_short_urb_count++;
 
         /* Carve the URB into delivered blocks of block_size_pairs*2 bytes. A
          * trailing partial chunk (rare; short packet) is delivered as-is. The
@@ -1382,6 +1400,7 @@ static void bulk_in_cb(usb_transfer_t *xfer)
         return;
 
     default:
+        d->pipe_other_status_count++;
         /* Unknown number of samples lost: fail closed for the rest of this boot. */
         d->mlat_clock_invalid = true;
         /* Transient error (timeout/overflow/error) — re-arm and keep going. */
@@ -1398,8 +1417,15 @@ static void bulk_in_cb(usb_transfer_t *xfer)
     int64_t submit_start_us = adsbin_now_us();
     d->perf_pre_submit_sum_us += (uint64_t)(submit_start_us - now);
     esp_err_t err = usb_host_transfer_submit(xfer);
-    d->perf_submit_sum_us += (uint64_t)(adsbin_now_us() - submit_start_us);
+    int64_t submit_end_us = adsbin_now_us();
+    d->perf_submit_sum_us += (uint64_t)(submit_end_us - submit_start_us);
     d->perf_count++;
+    uint64_t callback_us = (uint64_t)(submit_end_us - now);
+    d->pipe_callback_sum_us += callback_us;
+    if (callback_us > d->pipe_callback_max_us)
+        d->pipe_callback_max_us = callback_us > UINT32_MAX ? UINT32_MAX : (uint32_t)callback_us;
+    d->pipe_callback_count++;
+    if (err == ESP_OK) d->pipe_last_submit_end_us = submit_end_us;
     if (err != ESP_OK) {
         d->mlat_clock_invalid = true;
         lock();
@@ -1497,6 +1523,9 @@ static esp_err_t submit_urbs(usb_rtlsdr_dev_t *d)
             return err;
         }
         d->urbs_inflight++;
+        /* Seed the first submit-to-completion interval; subsequent ones are
+         * measured in bulk_in_cb immediately after each successful rearm. */
+        d->pipe_last_submit_end_us = adsbin_now_us();
     }
     return ESP_OK;
 }
@@ -2382,6 +2411,37 @@ static void usb_task(void *arg)
                          (unsigned)d->perf_copy_max_us,
                          (unsigned long long)(d->perf_pre_submit_sum_us / n),
                          (unsigned long long)(d->perf_submit_sum_us / n));
+                ESP_LOGW("usb_pipeline",
+                         "slot=%d active_min=%u active_max=%u "
+                         "wait_avg_us=%llu wait_max_us=%u wait_n=%u "
+                         "callback_avg_us=%llu callback_max_us=%u callback_n=%u "
+                         "full=%u short=%u status_other=%u",
+                         i,
+                         (unsigned)(d->pipe_inflight_samples ? d->pipe_inflight_min : 0),
+                         (unsigned)d->pipe_inflight_max,
+                         (unsigned long long)(d->pipe_wait_count ?
+                             d->pipe_wait_sum_us / d->pipe_wait_count : 0),
+                         (unsigned)d->pipe_wait_max_us,
+                         (unsigned)d->pipe_wait_count,
+                         (unsigned long long)(d->pipe_callback_count ?
+                             d->pipe_callback_sum_us / d->pipe_callback_count : 0),
+                         (unsigned)d->pipe_callback_max_us,
+                         (unsigned)d->pipe_callback_count,
+                         (unsigned)d->pipe_full_urb_count,
+                         (unsigned)d->pipe_short_urb_count,
+                         (unsigned)d->pipe_other_status_count);
+                d->pipe_wait_sum_us = 0;
+                d->pipe_callback_sum_us = 0;
+                d->pipe_wait_max_us = 0;
+                d->pipe_callback_max_us = 0;
+                d->pipe_wait_count = 0;
+                d->pipe_callback_count = 0;
+                d->pipe_inflight_min = 0;
+                d->pipe_inflight_max = 0;
+                d->pipe_inflight_samples = 0;
+                d->pipe_full_urb_count = 0;
+                d->pipe_short_urb_count = 0;
+                d->pipe_other_status_count = 0;
                 d->perf_gap_sum_us = 0;
                 d->perf_copy_sum_us = 0;
                 d->perf_pre_submit_sum_us = 0;
