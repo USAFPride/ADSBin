@@ -340,6 +340,22 @@ typedef struct {
     uint32_t perf_copy_max_us;
     uint32_t perf_count;
 
+    /* USB transfer-pipeline diagnostics. One host client task owns these.
+     * Timing is host-observed, never an RF/ADC timestamp. No new USB operations. */
+    int64_t  pipe_last_submit_end_us;
+    uint64_t pipe_wait_sum_us;     /**< Submit return -> next completion callback. */
+    uint64_t pipe_callback_sum_us; /**< Callback entry -> submit return. */
+    uint32_t pipe_wait_max_us;
+    uint32_t pipe_callback_max_us;
+    uint32_t pipe_wait_count;
+    uint32_t pipe_callback_count;
+    uint32_t pipe_inflight_min;
+    uint32_t pipe_inflight_max;
+    uint32_t pipe_inflight_samples;
+    uint32_t pipe_full_urb_count;
+    uint32_t pipe_short_urb_count;
+    uint32_t pipe_other_status_count;
+
     /* ---- the owned IQ ring (no-split; producer = Core-0 completion) ---- */
     RingbufHandle_t  iq_ring;            /**< Allocated at init, one per slot.   */
     uint32_t         block_seq;          /**< Monotonic iq_block_t.seq counter.  */
