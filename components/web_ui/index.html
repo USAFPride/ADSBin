@@ -23,6 +23,7 @@ input,select{width:100%;background:#0c1422;color:#fff;border:1px solid #394962;b
 input:focus{outline:2px solid #5687c3}button.primary{background:#3176bf;color:white;border:0;border-radius:9px;padding:13px 18px;font-weight:700;cursor:pointer}
 button.primary:disabled{background:#334054;cursor:not-allowed}
 .notice{border-left:3px solid #d4ad55;background:#29251d;padding:12px 16px;margin:14px 0;font-size:13px;line-height:1.6}
+.actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-top:14px}
 pre{overflow:auto;color:#91cfbb;font-size:12px;line-height:1.6}section[hidden]{display:none}
 .aircraft-table{width:100%;border-collapse:collapse;font-size:14px}
 .aircraft-table th,.aircraft-table td{padding:10px 12px;border-bottom:1px solid #28374d;text-align:left}
@@ -61,7 +62,7 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 <div class="panel"><h2>Connectivity</h2><div id="connectivity" class="small">Waiting for telemetry…</div></div>
 </section>
 <section id="network" hidden>
-<div class="panel"><h2>Wi-Fi and Beast TCP configuration</h2>
+<div class="panel"><h2>Wi-Fi configuration</h2>
 <div class="panel"><h2>Choose a Wi-Fi network</h2>
 <p class="small">Scan nearby networks, select one, enter its password, then select Save and Connect. The previous working network is kept if connection fails. Scanning may briefly interrupt the AP.</p>
 <button id="scanWifi" type="button">Scan networks</button>
@@ -73,12 +74,22 @@ footer{margin-top:25px;color:#7588a4;font-size:12px}[hidden]{display:none!import
 <div class="row">
 <div><label for="ssid">Wi-Fi SSID</label><input id="ssid" autocomplete="off" placeholder="Remote-site Wi-Fi"></div>
 <div><label for="wifiPass">Wi-Fi password</label><input id="wifiPass" type="text" autocomplete="off" spellcheck="false" placeholder="Enter Wi-Fi password (8–63 chars)"><p id="wifiPassState" class="small">Checking password setting…</p></div>
+</div>
+<div class="actions"><button id="connectWifi" type="button" class="primary">Save and Connect</button><button id="testWifi" class="primary" type="button">Test saved Wi-Fi connection</button></div>
+<p id="wifiTestStatus" class="small" role="status">Wi-Fi connection test not started.</p>
+</div>
+<div class="panel"><h2>Beast forwarding</h2>
+<p class="small">Forward validated aircraft frames to a saved Beast TCP destination reachable over LAN or WireGuard.</p>
+<div class="row">
 <div><label for="beastHost">Beast destination IPv4</label><input id="beastHost" placeholder="192.168.107.20"></div>
 <div><label for="beastPort">Beast TCP port</label><input id="beastPort" type="number" min="1" max="65535" value="30004"></div>
-</div><p class="small">Forwarding requires LAN or WireGuard reachability to the configured receiver.</p>
-<button id="connectWifi" type="button" class="primary">Save and Connect</button>
-<div class="panel"><h2>Beast forwarding to DietPi</h2><p id="beastState" class="small">Forwarding is disabled.</p><button id="beastToggle" class="primary" type="button">Enable forwarding</button><p class="small">Trusted LAN bench test only. This transmits validated aircraft frames to the saved Beast TCP destination. Timestamp is zero; not suitable for MLAT.</p></div><p id="networkSaveNotice" class="small"></p><p id="wifiTestStatus" class="small">Wi-Fi station test not started.</p><button id="testWifi" class="primary" type="button">Test Wi-Fi connection</button> <button id="saveNetwork" class="primary" type="button">Save settings</button>
-</div></section>
+</div>
+<div class="actions"><button id="saveBeast" class="primary" type="button">Save settings</button><button id="beastToggle" class="primary" type="button">Enable forwarding</button></div>
+<p id="networkSaveNotice" class="small" role="status"></p>
+<p id="beastState" class="small">Forwarding is disabled.</p>
+<p class="small">Trusted LAN bench test only. This transmits validated aircraft frames to the saved Beast TCP destination. Experimental sample-derived timestamps may be enabled in firmware; MLAT accuracy is not guaranteed.</p>
+</div>
+</section>
 <section id="wireguard" hidden>
 <div class="panel"><h2>WireGuard client</h2>
 <div class="notice">Credentials are stored in the development vault and never displayed after saving. WireGuard tunnel activation is not implemented in this PR.</div>
@@ -191,7 +202,7 @@ function updateBeastButton(){
 $('beastToggle').addEventListener('click',async ()=>{
  if(!beastEnabled && !confirm('Enable unencrypted Beast TCP forwarding to the configured LAN destination?'))return;
  const target=beastEnabled?'0':'1';
- const saved=await saveSettings({beast_enabled:target},'networkSaveNotice');
+ const saved=await saveSettings({beast_enabled:target},'networkSaveNotice','Beast forwarding setting saved.');
  if(saved){beastEnabled=target==='1';updateBeastButton();}
 });
 let wifiPasswordSaved=false;
@@ -308,34 +319,29 @@ async function loadSettings(){
   $('networkSaveNotice').textContent='Unable to load saved settings: '+e.message;
  }
 }
-async function saveSettings(payload,noticeId){
+async function saveSettings(payload,noticeId,successMessage='Settings saved in NVS.'){
  try{
   const resp=await fetch('/api/config',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
   if(!resp.ok){const t=await resp.text();throw Error('HTTP '+resp.status+' '+t.slice(0,160));}
   const result=await resp.json();
-  $(noticeId).textContent='Saved in NVS (server confirmed). Wi-Fi settings apply at STA startup; Beast settings at next TCP connect; WireGuard public fields are staged only.';
+  if(result.saved===true)$(noticeId).textContent=successMessage;
   return result.saved===true;
  }catch(e){$(noticeId).textContent='Save failed: '+e.message;return false;}
 }
-$('saveNetwork').addEventListener('click',async ()=>{
- const password=($('wifiPass').type==='text' && wifiPasswordSaved && $('wifiPass').value===wifiPasswordMask)?'':$('wifiPass').value;
- const payload={
-  wifi_ssid:$('ssid').value.trim(),
-  beast_host:$('beastHost').value.trim(),
-  beast_port:$('beastPort').value.trim()
- };
- if(password){
-  if($('wifiPass').disabled){$('networkSaveNotice').textContent='Password entry is disabled';return;}
-  if(password.length<8||password.length>63){$('networkSaveNotice').textContent='Password must have 8–63 characters';return;}
-  if(!confirm('Send this test Wi-Fi password over local HTTP and store it in the development vault?'))return;
-  payload.wifi_pass=password;
- }
- const saved=await saveSettings(payload,'networkSaveNotice');
- if(saved){
-  $('wifiPass').value='';
-  await loadSettings();
- }
+$('saveBeast').addEventListener('click',async ()=>{
+  const host=$('beastHost').value.trim();
+  const port=$('beastPort').value.trim();
+  const parts=host.split('.');
+  if(parts.length!==4 || parts.some(p=>!/^\d+$/.test(p)||Number(p)>255)){
+    $('networkSaveNotice').textContent='Enter a valid Beast destination IPv4 address.';return;
+  }
+  const portNum=Number(port);
+  if(!/^\d+$/.test(port)||!Number.isInteger(portNum)||portNum<1||portNum>65535){
+    $('networkSaveNotice').textContent='Enter a Beast port between 1 and 65535.';return;
+  }
+  await saveSettings({beast_host:host,beast_port:port},
+    'networkSaveNotice','Beast destination saved. Changes apply on the next TCP connection.');
 });
 $('testWifi').addEventListener('click',async ()=>{
   $('wifiTestStatus').textContent='Requesting Wi-Fi connection test…';
